@@ -513,6 +513,16 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 [data-theme="glass"] .refresh-banner { background:rgba(10,22,37,0.9); border-color:#27e8ff; box-shadow:0 0 22px rgba(39,232,255,0.14); }
 [data-theme="glass"] .refresh-primary { background:#27e8ff; color:#020408; box-shadow:0 0 16px rgba(39,232,255,0.28); }
 @media (max-width:600px) { .refresh-banner { padding:16px; } .refresh-primary { width:100%; } .refresh-banner-copy { flex-basis:100%; } }
+
+.quality-audit-card { cursor:pointer; }
+.quality-audit-card:focus-visible { outline:3px solid var(--series-1); outline-offset:3px; }
+.quality-audit-card[aria-expanded="true"] { border-color:var(--series-1); }
+#qualityPanels tfoot td.rowhead, .quality-conformance-details tfoot td.rowhead { display:table-cell; }
+.quality-conformance-details[hidden] { display:none !important; }
+.quality-conformance-details { margin-top:16px; }
+.quality-section-summary { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding:12px 16px; margin:8px 0 10px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); color:var(--text-secondary); font-size:13px; }
+.quality-section-summary strong { color:var(--text-primary); font-size:15px; }
+[data-theme="glass"] .quality-section-summary { background:rgba(13,34,50,0.85); border-color:rgba(39,232,255,0.4); }
 </style>
 </head>
 <body>
@@ -584,6 +594,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
   <!-- KPI ROW -->
   <div class="section">
     <div class="kpi-grid" id="kpiGrid"></div>
+    <section class="section quality-conformance-details" id="qualityConformanceDetails" hidden aria-label="Quality Conformance calculation backup"></section>
   </div>
 
   <!-- PRODUCTION / MTBF TABLE -->
@@ -1791,6 +1802,81 @@ function buildConsumptionPowerHover(h) {
     <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Zero-production sections contribute zero power for that day; metered standby energy on those days is excluded from date-range totals. No Raw Mill production gives zero current-day limestone mix allocation. Zero clinker production gives zero clinkerization specific power. Full precision is retained until display.</div>${missing}</div>`;
 }
 
+// The headline retains its registered main-process parameter list, but every
+// verdict now comes from the same real readings and live limits as the tables.
+let qualityConformanceOpen=false;
+function qualityHasLimits(target){
+  return !!target && target.Target!=null && Number.isFinite(target.Min) && Number.isFinite(target.Max) && target.Min<=target.Max;
+}
+function qualityGroupEntries(g){
+  const dataKey=g.real?'Cement '+g.cementType:g.dimSection;
+  let entries=g.real?cementParamNames(g.cementType):g.params;
+  if(g.excludeParams)entries=entries.filter(p=>!g.excludeParams.includes(p));
+  return entries.map(entry=>{
+    const override=typeof entry==='object',name=override?entry.name:entry;
+    const param=override?entry.sourceParam:name,key=override?entry.dataKey:dataKey;
+    const target=override?(PARAM_LOOKUP[paramKey(key,param)]||CEMENT_PARAM_LOOKUP[paramKey(key,param)]||null)
+      :(g.real?CEMENT_PARAM_LOOKUP[paramKey(g.cementType,name)]:PARAM_LOOKUP[paramKey(g.dimSection,name)]);
+    return {name,param,dataKey:key,target,dec:qualityDecimals(g.key,name)};
+  });
+}
+function computeSectionQualitySummary(g,dateFrom,dateTo){
+  const entries=qualityGroupEntries(g).map(entry=>{
+    const eligible=qualityHasLimits(entry.target);
+    const stat=realQualityStat(entry.dataKey,entry.param,dateFrom,dateTo,eligible?entry.target.Min:null,eligible?entry.target.Max:null);
+    return {...entry,eligible,stat};
+  });
+  const eligible=entries.filter(r=>r.eligible),weight=eligible.length?100/eligible.length:null;
+  let judged=0,within=0,oorReady=0,weightedSum=0;
+  entries.forEach(row=>{
+    row.weight=row.eligible?weight:null;
+    row.oorReady=row.eligible && row.stat.oorPct!==null && row.stat.oorSamples===row.stat.n;
+    row.contribution=row.oorReady?row.stat.oorPct*row.weight/100:null;
+    if(row.eligible && row.stat.avg!==null){judged++;if(row.stat.avg>=row.target.Min && row.stat.avg<=row.target.Max)within++;}
+    if(row.oorReady){oorReady++;weightedSum+=row.contribution;}
+  });
+  return {entries,eligible:eligible.length,weight,judged,within,oorReady,
+    weightedOor:eligible.length>0 && oorReady===eligible.length?weightedSum:null};
+}
+function computeQualityConformance(dateFrom,dateTo){
+  const rows=RESOURCE.dim_parameter.filter(p=>p.Target!=null).map(source=>{
+    const target=PARAM_LOOKUP[paramKey(source.Section_Name,source.Parameter_Name)]||source;
+    const eligible=qualityHasLimits(target);
+    const stat=realQualityStat(source.Section_Name,source.Parameter_Name,dateFrom,dateTo,eligible?target.Min:null,eligible?target.Max:null);
+    const judged=eligible && stat.avg!==null;
+    return {section:source.Section_Name==='Coal Mill'?'Fuel Mill':source.Section_Name,param:source.Parameter_Name,target,stat,judged,
+      status:!eligible?'No valid limits':stat.avg===null?'No data':stat.avg>=target.Min && stat.avg<=target.Max?'Within spec':'Out of spec'};
+  });
+  const judged=rows.filter(r=>r.judged).length,within=rows.filter(r=>r.status==='Within spec').length;
+  return {rows,registered:rows.length,judged,within,excluded:rows.length-judged,value:judged?within/judged*100:null,
+    partial:rows.some(r=>!r.judged || !r.stat.full)};
+}
+function renderQualityConformanceDetails(model){
+  const panel=document.getElementById('qualityConformanceDetails');
+  if(!panel)return;
+  panel.hidden=!qualityConformanceOpen;
+  const card=document.getElementById('qualityConformanceCard');
+  if(card){
+    card.setAttribute('aria-expanded',String(qualityConformanceOpen));
+    const toggle=()=>{qualityConformanceOpen=!qualityConformanceOpen;panel.hidden=!qualityConformanceOpen;card.setAttribute('aria-expanded',String(qualityConformanceOpen));};
+    card.addEventListener('click',toggle);
+    card.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}});
+  }
+  const safe=value=>escAttr(value);
+  const rows=model.rows.map(row=>`<tr><td class="rowhead">${safe(row.section)}</td><td>${safe(row.param)}</td><td>${fmt(row.target.Target,2)}</td><td>${fmt(row.target.Min,3)}</td><td>${fmt(row.target.Max,3)}</td><td><b>${fmt(row.stat.avg,3)}</b></td><td>${row.stat.n}</td><td>${row.stat.covered}/${row.stat.total}</td><td><span class="status-chip ${row.status==='Within spec'?'good':row.status==='Out of spec'?'critical':''}">${row.status}</span></td><td>${row.judged?'Yes':'Excluded'}</td></tr>`).join('');
+  panel.innerHTML=`<div class="section-head"><h2>Quality Conformance — calculation backup</h2><button class="preset-btn" id="closeQualityConformance">Hide table</button></div>
+    <p class="hint">${toISO(state.dateFrom)} to ${toISO(state.dateTo)}. Conformance = parameters whose actual average is within Min–Max ÷ parameters with real readings and valid limits × 100.</p>
+    <div class="quality-section-summary"><strong>${model.value===null?'N/A':fmt(model.value,2)+'%'} = ${model.within} ÷ ${model.judged} × 100</strong><span>${model.registered} registered parameters; ${model.excluded} excluded because readings or valid limits are unavailable.</span></div>
+    <p class="hint">This card covers the registered main-process parameters in Dim_Parameter, preserving its original scope. Cement parameters are included in their section summaries below. The verdict uses the selected period’s actual average; OOR % in the Quality Parameters tables measures individual sample breaches.</p>
+    <div class="table-wrap"><table><thead><tr><th>Section</th><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual avg</th><th>Samples</th><th>Days covered</th><th>Result</th><th>In calculation</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td class="rowhead" colspan="8">Within spec / assessed parameters</td><td>${model.within} / ${model.judged}</td><td>${model.value===null?'N/A':fmt(model.value,2)+'%'}</td></tr></tfoot></table></div>`;
+  document.getElementById('closeQualityConformance').addEventListener('click',()=>{qualityConformanceOpen=false;panel.hidden=true;if(card){card.setAttribute('aria-expanded','false');card.focus();}});
+}
+function sectionQualitySummaryHtml(model){
+  return `<div class="quality-section-summary"><strong>Overall weighted OOR: ${model.weightedOor===null?'N/A':fmt(model.weightedOor,2)+'%'}</strong>
+    <span>Equal weight: ${model.weight===null?'N/A':fmt(model.weight,2)+'%'} per parameter</span><span>OOR data: ${model.oorReady}/${model.eligible} parameters</span><span>Actual averages within spec: ${model.within}/${model.judged}</span></div>
+    <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed.</p>`;
+}
+
 function renderKPIs(){
   const grid = document.getElementById('kpiGrid');
 
@@ -1827,17 +1913,8 @@ function renderKPIs(){
   const mainAU = computeAvailUtilForDepts(MAIN_SECTION_DEPTS, state.dateFrom, state.dateTo);
   const supportAU = computeAvailUtilForDepts(SUPPORT_SECTION_DEPTS, state.dateFrom, state.dateTo);
 
-  // ---- Quality Conformance remains a modeled placeholder for now -- its hover panel is an
-  // honest note rather than a real breakdown table, so it never claims to be live data it isn't.
-  let qOk=0, qTotal=0;
-  RESOURCE.dim_parameter.forEach(p=>{
-    if(p.Target==null) return;
-    qTotal++;
-    const rng = rngFor(p.Section_Name,p.Parameter_Name,toISO(state.dateFrom),toISO(state.dateTo));
-    const v = within(rng, p.Min - (p.Max-p.Min)*0.15, p.Max + (p.Max-p.Min)*0.15);
-    if(v>=p.Min && v<=p.Max) qOk++;
-  });
-  const qConform = qTotal? (qOk/qTotal*100) : 0;
+  const qualityConformance=computeQualityConformance(state.dateFrom,state.dateTo);
+  const qConform=qualityConformance.value;
 
   // Consumption-adjusted ACTUAL calculations, following Power Calculation.xlsx / Sheet1.
   // The existing production-based target benchmarks retain their original definitions.
@@ -1917,9 +1994,9 @@ function renderKPIs(){
       delta: (targetSpecPowerClinker!=null && actualSpecPowerClinker!=null) ? -(actualSpecPowerClinker-targetSpecPowerClinker) : null,
       sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT'+(actualSpecPowerClinker===null?'<br>'+consumptionPower.clinkerReason:(consumptionPower.rateCoverageLabel?'<br>'+consumptionPower.rateCoverageLabel:'')), invert:true,
       hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker}},
-    {label:'Quality Conformance', value: fmt(qConform,0), unit:'%', delta: qConform-90, sub: qOk+' / '+qTotal+' params in range',
-      hover: { kind:'note', title:'Quality Conformance', badge:'SAMPLE',
-        note: qOk+' of '+qTotal+' registered QMS parameters (real Min/Max/Target thresholds, from your parameter sheet) are modeled as in-range for this window &mdash; the in-range check itself is still a placeholder, not yet a live reading per parameter. Quality % from your real Bad Quality Production log exists elsewhere but is still being finalized (see the Production &amp; MTBF table\'s note) before it can drive this card.' } },
+    {label:'Quality Conformance', value:qConform===null?'N/A':fmt(qConform,0), unit:'%', delta:qConform===null?null:qConform-90,
+      sub:qualityConformance.within+' / '+qualityConformance.judged+' measured params in range'
+        +(qualityConformance.excluded?' · '+qualityConformance.excluded+' excluded':'')+'<br>Click to show / hide calculation backup', qualityAudit:true},
     {label:'Clinker Factor — PPC', value: fmt(ppcClinkerActual.actual,1), unit:'%', lowerIsBetter: true,
       delta: (ppcClinkerActual.actual!=null && targetClinkerFactorPPC!=null) ? (ppcClinkerActual.actual-targetClinkerFactorPPC) : null,
       sub: 'Target '+fmt(targetClinkerFactorPPC,1)+'%'
@@ -1960,7 +2037,7 @@ function renderKPIs(){
     const isGood = goodIsUp ? up : !up;
     const dirClass = isGood ? 'up' : 'down';
     const deltaHtml = hasDelta ? `<div class="kpi-delta ${dirClass}">${arrow} ${fmt(Math.abs(c.delta),1)}${c.unit==='%'?' pts':'%'} vs target</div>` : '';
-    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}">
+    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}<span class="kpi-unit">${c.unit}</span></div>
       ${deltaHtml}
@@ -1969,6 +2046,7 @@ function renderKPIs(){
     </div>`;
   }).join('');
   positionKpiHoverPanels();
+  renderQualityConformanceDetails(qualityConformance);
 }
 // Positions each KPI hover panel so it never overflows the viewport: measured once per render
 // (panels are display:none by default and shown purely via CSS :hover, so this briefly makes a
@@ -3224,7 +3302,7 @@ function qualityDecimals(groupKey, paramName){
 // section. `target` is {Target,Min,Max,Unit} or null (no target registered yet -- still shows
 // the real number, just without a spec-compliance verdict). `dataKey`/`sourceParam` locate the
 // pre-aggregated real reading; `seedKey`/`seedParam` seed the sample fallback when there's none.
-function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedParam, dec, dateFrom, dateTo){
+function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedParam, dec, dateFrom, dateTo, weightInfo){
   const _hasSpec = !!(target && target.Min!=null && target.Max!=null);
   const real = realQualityStat(dataKey, sourceParam, dateFrom, dateTo, _hasSpec?target.Min:null, _hasSpec?target.Max:null);
   const coverage = real.covered===0 ? 'none' : (real.full ? 'full' : 'partial');
@@ -3257,6 +3335,7 @@ function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedPara
     <td class="muted-cell"${tt('Highest single reading of '+displayName+' in the selected window.')}>${amax!=null?fmt(amax,dec):'&mdash;'}</td>
     <td class="muted-cell"${tt('OOR (count) = number of individual samples of '+displayName+' in the selected window that fall outside the Min to Max range above'+(real.oorSamples>0?(' -- '+real.oor+' of '+real.oorSamples+' samples.'):' -- not available (no individual samples loaded for this window yet, or no Min/Max registered).'))}>${oorCountHtml}</td>
     <td class="muted-cell"${tt('OOR % = out-of-range samples &divide; all samples of '+displayName+' in the selected window &times; 100.')}>${oorPctHtml}</td>
+    ${weightInfo?`<td${tt('Equal parameter weight in this section.')}>${weightInfo.weight===null?'&mdash;':fmt(weightInfo.weight,2)+'%'}</td><td${tt('Weighted OOR contribution in percentage points = parameter OOR % × Weight % ÷ 100.')}>${weightInfo.contribution===null?'&mdash;':fmt(weightInfo.contribution,2)+' pp'}</td>`:''}
     <td${tt('Whether the Actual Average falls within the Min/Max spec range above.')}>${statusHtml}</td>
   </tr>`;
   return {html, coverage};
@@ -3278,7 +3357,8 @@ function renderQualityTabs(){
     let paramEntries = g.real ? cementParamNames(g.cementType) : g.params;
     if(g.excludeParams) paramEntries = paramEntries.filter(p=>!g.excludeParams.includes(p));
     let anyFull=false, anyPartial=false, anySample=false;
-    const bodyRows = paramEntries.map(entry=>{
+    const sectionSummary=computeSectionQualitySummary(g,state.dateFrom,state.dateTo);
+    const bodyRows = paramEntries.map((entry,index)=>{
       const isOverride = typeof entry === 'object';
       const pName = isOverride ? entry.name : entry;
       const rowDataKey = isOverride ? entry.dataKey : dataKey;
@@ -3295,11 +3375,11 @@ function renderQualityTabs(){
         // status reads "No target set"); only collapse to the notice row when there is no data either.
         const probe = realQualityStat(rowDataKey, sourceParam, state.dateFrom, state.dateTo);
         if(probe.covered===0){
-          return `<tr><td class="rowhead">${pName}</td><td colspan="10" class="muted-cell">No target registered in Dim_Parameter yet &mdash; DATA NOT AVAILABLE for this window</td></tr>`;
+          return `<tr><td class="rowhead">${pName}</td><td colspan="11" class="muted-cell">No target registered in Dim_Parameter yet &mdash; DATA NOT AVAILABLE for this window</td></tr>`;
         }
       }
       const dec = qualityDecimals(g.key, pName);
-      const {html, coverage} = qualityRow(pName, target, rowDataKey, sourceParam, g.key, pName, dec, state.dateFrom, state.dateTo);
+      const {html, coverage} = qualityRow(pName, target, rowDataKey, sourceParam, g.key, pName, dec, state.dateFrom, state.dateTo,sectionSummary.entries[index]);
       if(coverage==='full') anyFull = true; else if(coverage==='partial') anyPartial = true; else anySample = true;
       return html;
     }).join('');
@@ -3311,10 +3391,12 @@ function renderQualityTabs(){
     const cementNote = g.real ? ` Blaine/Residue/LOI/SO3/CaO/MgO come from the Cement Mill Grinding Log Sheet, filtered by Type of Cement = ${g.cementType}. 1-Day and 3-Day strength come from the Compressive Strength Main Sheet, filtered to Type of Product = &quot;${g.cementType} Grinding&quot; only (&quot;${g.cementType} Packing&quot; and &quot;Mkt ${g.cementType}&quot; excluded). 7-Day and 28-Day have moved to the dedicated <a href="#compressive-strength">Compressive Strength</a> section below, since those results lag the sample date by that many days.` : (g.key==='Clinker' ? ' The last row (1 Day, Ballmill) is a grindability check from the Compressive Strength Main Sheet’s "Clinker Ballmill" rows; its Target/Min/Max (if shown) come from a matching row in your Dim_Parameter or Dim_Parameter_Cement sheet keyed under "Clinker Ballmill" -- otherwise it shows the real reading with no spec verdict.' : '');
     return `<div class="quality-tab-panel tab-panel ${i===0?'active':''}" id="qp-${g.key}">
       <p class="hint" style="margin:0 2px 8px;">${panelBadge} computed from your QMS log-sheet export for this section, summed/averaged over the date range selected above &mdash; the badge on each row shows exactly how many of the selected days have a real reading for that specific parameter.${cementNote}</p>
+      ${sectionQualitySummaryHtml(sectionSummary)}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual Avg</th><th>Actual Min</th><th>Actual Max</th><th>OOR (Count)</th><th>OOR %</th><th>Status</th></tr></thead>
+          <thead><tr><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual Avg</th><th>Actual Min</th><th>Actual Max</th><th>OOR (Count)</th><th>OOR %</th><th>Weight %</th><th>Weighted OOR contribution</th><th>Status</th></tr></thead>
           <tbody>${bodyRows}</tbody>
+          <tfoot><tr><td class="rowhead" colspan="8">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
         </table>
       </div>
     </div>`;
@@ -4898,7 +4980,7 @@ async function doLiveQualityRefresh(){
       renderCompressiveStrengthTabs();
       if(gotProd || gotStop || gotTargetProd){ renderProductionTable(); renderMtbfChart(); renderDowntimeChart(); }
       if(gotPower) renderPowerChart();
-      if(gotAdditive || gotClinkerActual || gotProd || gotPower || gotTargetProd || gotSpHeatTarget || gotSpHeatActual || Object.keys(specificPowerResult.data).length) renderKPIs();
+      if(gotAny || targetResult.updated>0 || gotAdditive || gotClinkerActual || gotProd || gotPower || gotTargetProd || gotSpHeatTarget || gotSpHeatActual || Object.keys(specificPowerResult.data).length) renderKPIs();
       if(gotCppActual || gotCppTarget || (targetResult && targetResult.updated>0)) renderCppKpis();
     } else if(status){
       const shown = allErrors.slice(0,8).join('; ') + (allErrors.length>8 ? ` &hellip; (+${allErrors.length-8} more)` : '');
