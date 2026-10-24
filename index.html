@@ -495,6 +495,24 @@ html.boardroom .grid-2, html.boardroom .grid-3 { grid-template-columns: 1fr !imp
 .boardroom-toggle { border:1px solid var(--border); background:var(--surface-2); color: var(--text-primary); border-radius: 10px; height:34px; padding: 0 12px; display:flex; align-items:center; gap:6px; cursor:pointer; font-family:inherit; font-size:12.5px; font-weight:700; box-shadow:var(--shadow-sm); }
 [data-theme="glass"] .boardroom-toggle { background: rgba(2,4,8,0.55); border: var(--glass-border); box-shadow: var(--well); }
 html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #020408 !important; box-shadow: 0 0 18px rgba(39,232,255,0.6) !important; }
+
+/* The first action on opening the dashboard: load the current source data. */
+.refresh-banner { margin:0 0 18px; padding:18px 20px; border:1px solid var(--series-1); border-radius:var(--radius); background:var(--surface-2); box-shadow:var(--shadow-md); }
+.refresh-banner-main { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; }
+.refresh-banner-copy { flex:1 1 440px; }
+.refresh-banner-copy h2 { margin:0 0 6px; font-size:20px; line-height:1.3; color:var(--text-primary); }
+.refresh-banner-copy p { margin:0; color:var(--text-secondary); font-size:14px; line-height:1.6; }
+.refresh-primary { min-height:46px; padding:12px 20px; border:0; border-radius:10px; background:var(--series-1); color:#fff; font-size:15px; font-weight:750; white-space:nowrap; }
+.refresh-primary:hover:not(:disabled) { filter:brightness(1.1); }
+.refresh-primary:disabled { cursor:wait; opacity:0.65; }
+.refresh-primary:focus-visible { outline:3px solid var(--series-1); outline-offset:4px; }
+.refresh-status { margin:12px 0 0; line-height:1.6; }
+.refresh-settings { margin-top:10px; color:var(--text-secondary); font-size:12px; }
+.refresh-settings summary { cursor:pointer; width:fit-content; }
+.refresh-settings label { display:block; margin-top:10px; }
+[data-theme="glass"] .refresh-banner { background:rgba(10,22,37,0.9); border-color:#27e8ff; box-shadow:0 0 22px rgba(39,232,255,0.14); }
+[data-theme="glass"] .refresh-primary { background:#27e8ff; color:#020408; box-shadow:0 0 16px rgba(39,232,255,0.28); }
+@media (max-width:600px) { .refresh-banner { padding:16px; } .refresh-primary { width:100%; } .refresh-banner-copy { flex-basis:100%; } }
 </style>
 </head>
 <body>
@@ -536,6 +554,22 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 </div>
 
 <div class="app">
+
+  <section class="refresh-banner" aria-labelledby="refreshHeading">
+    <div class="refresh-banner-main">
+      <div class="refresh-banner-copy">
+        <h2 id="refreshHeading">Refresh whenever you open this dashboard</h2>
+        <p>Click <strong>Refresh all live data</strong> before checking the figures. Allow about <strong>1 minute</strong> for the latest data to load.</p>
+      </div>
+      <button class="preset-btn refresh-primary" id="qualityLiveRefreshBtn">&#128260; Refresh all live data</button>
+    </div>
+    <p class="hint refresh-status" id="qualityLiveStatus" role="status">Not refreshed yet. Click Refresh all live data to load the latest figures.</p>
+    <details class="refresh-settings">
+      <summary>Connection settings</summary>
+      <label for="appsScriptUrlInput">Live data URL</label>
+      <input type="text" id="appsScriptUrlInput" class="lineage-search" style="margin:8px 0 0; width:100%; padding:8px 10px; font-size:12.5px;" value="https://script.google.com/macros/s/AKfycbxugy7R8cR4fSJYGP5R1o7awlLj93EVhNcp5fshYZOVJEnT--0ZY9kl7OopjHzJBPCQ/exec" placeholder="Paste your Apps Script Web App URL (ends in /exec)">
+    </details>
+  </section>
 
   <div class="callout info" id="modeExplainer">
     <span>&#9432;</span>
@@ -709,11 +743,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
       <h2>Quality Parameters</h2>
       <div class="section-toolbar">
         <div class="tabs" id="qualityTabs"></div>
-        <input type="text" id="appsScriptUrlInput" class="lineage-search" style="margin:0; width:280px; padding:8px 10px; font-size:12.5px;" value="https://script.google.com/macros/s/AKfycbxugy7R8cR4fSJYGP5R1o7awlLj93EVhNcp5fshYZOVJEnT--0ZY9kl7OopjHzJBPCQ/exec" placeholder="Paste your Apps Script Web App URL (ends in /exec)">
-        <button class="preset-btn" id="qualityLiveRefreshBtn" style="white-space:nowrap;">&#128260; Refresh all live data</button>
       </div>
     </div>
-    <p class="hint" id="qualityLiveStatus" style="margin:0 0 10px;">Not yet refreshed this session &mdash; showing the snapshot baked in when this file was generated. The Apps Script Web App URL is already filled in above &mdash; just click &quot;Refresh all live data&quot; to pull the current data from your sheets &mdash; this one button refreshes Quality Parameters, Compressive Strength, the Production &amp; MTBF table, MTBF/Stoppage charts, Power, Clinker Factor (Target &amp; Actual), and CPP Actual &amp; Target, all from the same Apps Script endpoint. Clinker Factor reuses the Production Target / Cement Mill worksheets your script already sends; CPP needs its two worksheets added to the script first (see Data Lineage &mdash; CPP rows) or it will report &ldquo;worksheet not found&rdquo; for those two. (If you ever redeploy the Apps Script and get a new URL, paste it into the box above to replace this one.)</p>
     <div id="qualityPanels"></div>
   </div>
 
