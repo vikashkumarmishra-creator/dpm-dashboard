@@ -1564,9 +1564,11 @@ function computePlantAvailUtil(dateFrom, dateTo){
 // All quantities and energies must cover the same selected reporting window.
 function calculateConsumptionSpecificPower(input) {
   const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  const ratio = (energy, production) => valid(energy) && valid(production) && production > 0 ? energy / production : null;
+  // User rule: a known zero-production section has zero specific power.
+  const ratio = (energy, production) => production === 0 ? 0 : (valid(energy) && valid(production) ? energy / production : null);
   const allocate = (energy, production, consumed) => {
-    if (energy === 0 && production === 0 && consumed === 0) return 0;
+    if (production === 0) return 0;
+    if (valid(energy) && valid(production) && consumed === 0) return 0;
     const specific = ratio(energy, production);
     return specific !== null && valid(consumed) ? specific * consumed : null;
   };
@@ -1577,13 +1579,13 @@ function calculateConsumptionSpecificPower(input) {
   const additiveConsumed = valid(input.rawMillAdditiveConsumed) && valid(input.cementBlackFlyAshConsumed)
     ? input.rawMillAdditiveConsumed + input.cementBlackFlyAshConsumed : null;
   const sections = [
-    { label: 'Additive Crusher', consumed: additiveConsumed, production: input.additiveProduction, energy: input.additiveKwh },
-    { label: 'LS Crusher', consumed: limestoneConsumed, production: input.limestoneProduction, energy: input.limestoneKwh },
-    { label: 'Raw Mill', consumed: rawConsumed, production: input.rawMillProduction, energy: input.rawMillKwh },
-    { label: 'Coal Mill', consumed: input.fuelConsumed, production: input.fuelProduction, energy: input.fuelKwh },
+    { label: 'Additive Crusher', consumed: additiveConsumed, production: input.additiveProduction, energy: input.additiveKwh, meterEnergy:input.additiveMeterKwh??input.additiveKwh },
+    { label: 'LS Crusher', consumed: limestoneConsumed, production: input.limestoneProduction, energy: input.limestoneKwh, meterEnergy:input.limestoneMeterKwh??input.limestoneKwh },
+    { label: 'Raw Mill', consumed: rawConsumed, production: input.rawMillProduction, energy: input.rawMillKwh, meterEnergy:input.rawMillMeterKwh??input.rawMillKwh },
+    { label: 'Coal Mill', consumed: input.fuelConsumed, production: input.fuelProduction, energy: input.fuelKwh, meterEnergy:input.fuelMeterKwh??input.fuelKwh },
   ].map(row => ({ ...row, specific: ratio(row.energy, row.production), allocatedKwh: allocate(row.energy, row.production, row.consumed) }));
   sections.push({ label: 'Kiln', consumed: input.clinkerProduction, production: input.clinkerProduction,
-    energy: input.kilnKwh, specific: ratio(input.kilnKwh, input.clinkerProduction), allocatedKwh: valid(input.kilnKwh) ? input.kilnKwh : null });
+    energy: input.kilnKwh, meterEnergy:input.kilnMeterKwh??input.kilnKwh, specific: ratio(input.kilnKwh, input.clinkerProduction), allocatedKwh: input.clinkerProduction===0 ? 0 : (valid(input.kilnKwh) ? input.kilnKwh : null) });
   const clinkerKwh = sections.every(row => row.allocatedKwh !== null)
     ? sections.reduce((sum, row) => sum + row.allocatedKwh, 0) : null;
   const clinkerSpecific = ratio(clinkerKwh, input.clinkerProduction);
@@ -1595,8 +1597,8 @@ function calculateConsumptionSpecificPower(input) {
   const overallClinkerFactor = ratio(weightedClinkerQty, input.cementProduction);
   const cementGrindingKwh = valid(input.ppcKwh) && valid(input.opcKwh) ? input.ppcKwh + input.opcKwh : null;
   const cementGrindingSpecific = ratio(cementGrindingKwh, input.cementProduction);
-  const cementSpecific = clinkerSpecific !== null && overallClinkerFactor !== null && cementGrindingSpecific !== null
-    ? clinkerSpecific * overallClinkerFactor + cementGrindingSpecific : null;
+  const cementSpecific = input.cementProduction===0 ? 0 : (clinkerSpecific !== null && overallClinkerFactor !== null && cementGrindingSpecific !== null
+    ? clinkerSpecific * overallClinkerFactor + cementGrindingSpecific : null);
   return { sections, clinkerKwh, clinkerSpecific, overallClinkerFactor, cementGrindingKwh, cementGrindingSpecific, cementSpecific };
 }
 if (typeof module !== 'undefined') module.exports = { calculateConsumptionSpecificPower };
@@ -1619,6 +1621,10 @@ function refreshLiveSpecificPowerInputs(payload) {
     const exactCol = name => Object.keys(rows[0]).find(key=>normColName(key)===normColName(name));
     const dCol = exactCol('Actual Date');
     if(!dCol){ errors.push(ws+': Actual Date missing for Specific Power cards'); return; }
+    const sourceDates = rows.map(row=>parseGvizDate(row[dCol]) || (typeof row[dCol]==='string' ? new Date(row[dCol]) : null))
+      .filter(d=>d && !isNaN(d)).map(toISO);
+    const datesWithRows = new Set(sourceDates);
+    const orderedDates = [...datesWithRows].sort();
     Object.entries(fields).forEach(([field,name])=>{
       const col = exactCol(name);
       if(!col){ errors.push(ws+': '+name+' missing for Specific Power cards'); return; }
@@ -1630,6 +1636,17 @@ function refreshLiveSpecificPowerInputs(payload) {
         const rec = data[iso] || (data[iso]={});
         rec[field] = (rec[field] || 0) + value;
       });
+      // Match the PMS production convention: a date with NO log rows inside
+      // this source's covered calendar range is a stopped day, hence zero
+      // consumption. A present row with a blank reading remains unavailable.
+      // Never infer zeros outside coverage or when the column is missing.
+      if(orderedDates.length){
+        isoRangeDays(new Date(orderedDates[0]+'T00:00:00'),new Date(orderedDates[orderedDates.length-1]+'T00:00:00')).forEach(iso=>{
+          if(!datesWithRows.has(iso)){
+            const rec=data[iso] || (data[iso]={}); rec[field]=0;
+          }
+        });
+      }
     });
   });
   return {data,errors};
@@ -1647,7 +1664,8 @@ function computeConsumptionPowerWindow(dateFrom,dateTo) {
   const input = {
     ...totals, returnDustFraction:0.04,
     limestoneFraction:totals.rawDryProduction>0 && totals.limestoneDry1!==null && totals.limestoneDry2!==null
-      ? (totals.limestoneDry1+totals.limestoneDry2)/totals.rawDryProduction : null,
+      ? (totals.limestoneDry1+totals.limestoneDry2)/totals.rawDryProduction
+      : (totals.rawDryProduction===0 && totals.limestoneDry1===0 && totals.limestoneDry2===0 ? 0 : null),
     fuelConsumed:totals.fuelMB!==null && totals.fuelPC!==null ? totals.fuelMB+totals.fuelPC : null,
   };
   const sectionMap = [
@@ -1657,10 +1675,11 @@ function computeConsumptionPowerWindow(dateFrom,dateTo) {
   sectionMap.forEach(([section,prodField,kwhField])=>{
     const prod = realActualSum(section,dateFrom,dateTo);
     input[prodField] = prod.full ? prod.prod : null;
-    const coverage = coverageInfo(REAL_POWER_BOUNDS,section,days);
     const series = REAL_POWER[section] || {};
-    input[kwhField] = coverage.covered===coverage.total && days.every(iso=>Number.isFinite(series[iso]))
-      ? days.reduce((sum,iso)=>sum+series[iso],0) : null;
+    const dayProd=iso=>(REAL_ACTUAL[section] && REAL_ACTUAL[section][iso] ? REAL_ACTUAL[section][iso].prod : 0);
+    input[kwhField] = prod.full && days.every(iso=>dayProd(iso)===0 || Number.isFinite(series[iso]))
+      ? days.reduce((sum,iso)=>sum+(dayProd(iso)===0 ? 0 : series[iso]),0) : null;
+    input[kwhField.replace('Kwh','MeterKwh')] = days.every(iso=>Number.isFinite(series[iso])) ? days.reduce((sum,iso)=>sum+series[iso],0) : null;
     if(input[prodField]===null || input[kwhField]===null) missing.push(section+' production/power');
   });
   const ppc = realActualSum('Cement Mill PPC',dateFrom,dateTo), opc = realActualSum('Cement Mill OPC',dateFrom,dateTo);
@@ -1671,38 +1690,55 @@ function computeConsumptionPowerWindow(dateFrom,dateTo) {
   input.ppcClinkerFactorPct = ppc.full && ppc.prod===0 ? 0 : (ppcCF.full ? ppcCF.actual : null);
   input.opcClinkerFactorPct = opc.full && opc.prod===0 ? 0 : (opcCF.full ? opcCF.actual : null);
   const cementPower = REAL_POWER['Cement Mill'] || {};
-  const cementPowerCoverage = coverageInfo(REAL_POWER_BOUNDS,'Cement Mill',days);
   // One shared electrical meter: use its energy once, equivalent to PPC+OPC
   // allocated energies in Sheet1, without double counting the physical mill.
-  input.ppcKwh = cementPowerCoverage.covered===cementPowerCoverage.total && days.every(iso=>Number.isFinite(cementPower[iso]))
-    ? days.reduce((sum,iso)=>sum+cementPower[iso],0) : null;
+  const cementDayProd=iso=>['Cement Mill PPC','Cement Mill OPC'].reduce((sum,sec)=>sum+((REAL_ACTUAL[sec]||{})[iso]?.prod||0),0);
+  input.ppcKwh = ppc.full && opc.full && days.every(iso=>cementDayProd(iso)===0 || Number.isFinite(cementPower[iso]))
+    ? days.reduce((sum,iso)=>sum+(cementDayProd(iso)===0 ? 0 : cementPower[iso]),0) : null;
+  input.cementMeterKwh = days.every(iso=>Number.isFinite(cementPower[iso])) ? days.reduce((sum,iso)=>sum+cementPower[iso],0) : null;
   input.opcKwh = 0;
   const result = calculateConsumptionSpecificPower(input);
-  return {...result,input,missing,badge:result.clinkerSpecific!==null?'LIVE':'SAMPLE'};
+  const clinkerReasons=[];
+  result.sections.filter(row=>row.allocatedKwh===null && row.production===0).forEach(row=>clinkerReasons.push('No '+row.label+' production'));
+  const sourceNames={rawMillAdditiveConsumed:'Raw Mill WF-04 consumption',limestoneDry1:'Limestone WF-01 dry quantity',limestoneDry2:'Limestone WF-02 dry quantity',rawDryProduction:'Raw Mill dry production',kilnFeed:'Kiln feed',fuelMB:'MB fuel consumption',fuelPC:'PC fuel consumption',cementBlackFlyAshConsumed:'Cement black fly ash consumption'};
+  if(result.clinkerSpecific===null && missing.length) clinkerReasons.push('Missing source data: '+missing.map(key=>sourceNames[key]||key).join(', '));
+  if(result.clinkerSpecific===null && !clinkerReasons.length) clinkerReasons.push('Required production or consumption data unavailable');
+  const cementReasons=[];
+  if(input.cementProduction!==0) {
+    if(result.clinkerSpecific===null) cementReasons.push(...clinkerReasons);
+    if(input.cementProduction===null) cementReasons.push('Cement production data unavailable');
+    if(input.ppcClinkerFactorPct===null || input.opcClinkerFactorPct===null) cementReasons.push('Clinker factor data unavailable');
+    if(input.ppcKwh===null) cementReasons.push('Cement mill power data unavailable');
+  }
+  return {...result,input,missing,clinkerReasons,cementReasons,
+    clinkerReason:(clinkerReasons[0]||'').startsWith('Missing source data:')?'Source data unavailable':(clinkerReasons[0]||''),
+    cementReason:(cementReasons[0]||'').startsWith('Missing source data:')?'Source data unavailable':(cementReasons[0]||''),badge:result.clinkerSpecific!==null?'LIVE':'SAMPLE'};
 }
 
 function buildConsumptionPowerHover(h) {
   const c = h.calculation, input = c.input;
-  const missing = c.missing.length ? '<div class="kpi-hover-note">Missing source coverage: '+c.missing.join(', ')+'. Refresh live data for this date range.</div>' : '';
+  const reasons = h.metric==='cement' ? c.cementReasons : c.clinkerReasons;
+  const missing = reasons.length ? '<div class="kpi-hover-note">'+reasons.join('. ')+'. Missing required readings remain unavailable.</div>' : '';
   if(h.metric==='cement'){
     return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.cementSpecific!==null?'LIVE':'SAMPLE')} Specific Power Till Cement</div>
       <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:430px;"><thead><tr><th>Calculation</th><th>Actual</th></tr></thead><tbody>
       <tr><td class="rowhead">Specific Power Till Clinkerization (unrounded)</td><td>${fmt(c.clinkerSpecific,5)} kWh/MT</td></tr>
       <tr><td class="rowhead">Overall clinker factor: (PPC MT × PPC factor + OPC MT × OPC factor) ÷ total cement MT</td><td>${fmt(c.overallClinkerFactor===null?null:c.overallClinkerFactor*100,5)}%</td></tr>
-      <tr><td class="rowhead">Cement mill power (PPC + OPC, one meter)</td><td>${fmt(c.cementGrindingKwh,3)} kWh</td></tr>
+      <tr><td class="rowhead">Cement mill meter (PPC + OPC, one meter)</td><td>${fmt(input.cementMeterKwh,3)} kWh</td></tr>
+      <tr><td class="rowhead">Cement mill power used (zero-production days excluded)</td><td>${fmt(c.cementGrindingKwh,3)} kWh</td></tr>
       <tr><td class="rowhead">Total cement production</td><td>${fmt(input.cementProduction,5)} MT</td></tr>
       <tr><td class="rowhead">Cement grinding power ÷ cement production</td><td>${fmt(c.cementGrindingSpecific,5)} kWh/MT</td></tr>
       </tbody><tfoot><tr><td class="rowhead">Clinkerization specific power × overall clinker factor + cement grinding specific power</td><td>${fmt(c.cementSpecific,2)} kWh/MT</td></tr>
-      <tr><td class="rowhead">Existing production-based target</td><td>${fmt(h.target,2)} kWh/MT</td></tr></tfoot></table></div>${missing}</div>`;
+      <tr><td class="rowhead">Existing production-based target</td><td>${fmt(h.target,2)} kWh/MT</td></tr></tfoot></table></div><div class="kpi-hover-note">Zero cement production gives zero specific power. Each zero-production section contributes zero power for that day, including within date-range totals.</div>${missing}</div>`;
   }
-  const rows=c.sections.map(row=>`<tr><td class="rowhead">${row.label}</td><td>${fmt(row.production,3)}</td><td>${fmt(row.energy,3)}</td><td>${fmt(row.specific,5)}</td><td>${fmt(row.consumed,3)}</td><td>${fmt(row.allocatedKwh,3)}</td></tr>`).join('');
+  const rows=c.sections.map(row=>`<tr><td class="rowhead">${row.label}</td><td>${fmt(row.production,3)}</td><td>${fmt(row.meterEnergy,3)}</td><td>${fmt(row.specific,5)}</td><td>${fmt(row.consumed,3)}</td><td>${fmt(row.allocatedKwh,3)}</td></tr>`).join('');
   return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.badge)} Specific Power Till Clinkerization</div>
     <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:650px;"><thead><tr><th>Section</th><th>Production (MT)</th><th>Meter (kWh)</th><th>kWh/MT material</th><th>Consumed (MT)</th><th>Allocated kWh</th></tr></thead><tbody>${rows}</tbody><tfoot>
     <tr><td class="rowhead" colspan="5">Total allocated power</td><td>${fmt(c.clinkerKwh,3)}</td></tr>
     <tr><td class="rowhead" colspan="5">÷ Clinker production (MT)</td><td>${fmt(input.clinkerProduction,5)}</td></tr>
     <tr><td class="rowhead" colspan="5">= Specific Power Till Clinkerization (kWh/MT)</td><td>${fmt(c.clinkerSpecific,1)}</td></tr>
     <tr><td class="rowhead" colspan="5">Existing production-based target (kWh/MT)</td><td>${fmt(h.target,1)}</td></tr></tfoot></table></div>
-    <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Full source precision is retained; only displayed results are rounded.</div>${missing}</div>`;
+    <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Zero-production sections contribute zero power for that day; metered standby energy on those days is excluded from date-range totals. No Raw Mill production gives zero current-day limestone mix allocation. Zero clinker production gives zero clinkerization specific power. Full precision is retained until display.</div>${missing}</div>`;
 }
 
 function renderKPIs(){
@@ -1823,13 +1859,13 @@ function renderKPIs(){
       hover: { kind:'hours', title:'Support Section Utilization = &Sigma; Running Hour &divide; &Sigma; Calendar Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant contributes double Calendar Hours since it combines two loading lines)',
         badge: supportAU.badge, rows: supportAU.rows, metric:'util', footLabel: 'Support Section',
         totalRun: supportAU.totalRun, totalPlanned: supportAU.totalPlanned, totalCalendar: supportAU.totalCalendar, result: supportAU.util } },
-    {label:'Specific Power Till Cement', value: fmt(actualSpecPowerCement,2), unit:'kWh/MT',
+    {label:'Specific Power Till Cement', value: actualSpecPowerCement===null?'N/A':fmt(actualSpecPowerCement,2), unit:'kWh/MT',
       delta: (targetSpecPowerCement!=null && actualSpecPowerCement!=null) ? -(actualSpecPowerCement-targetSpecPowerCement) : null,
-      sub: 'Target '+fmt(targetSpecPowerCement,2)+' kWh/MT', invert:true,
+      sub: 'Target '+fmt(targetSpecPowerCement,2)+' kWh/MT'+(actualSpecPowerCement===null?'<br>'+consumptionPower.cementReason:''), invert:true,
       hover: {kind:'consumptionpower', metric:'cement', calculation:consumptionPower, target:targetSpecPowerCement}},
-    {label:'Specific Power Till Clinkerization', value: fmt(actualSpecPowerClinker,1), unit:'kWh/MT',
+    {label:'Specific Power Till Clinkerization', value: actualSpecPowerClinker===null?'N/A':fmt(actualSpecPowerClinker,1), unit:'kWh/MT',
       delta: (targetSpecPowerClinker!=null && actualSpecPowerClinker!=null) ? -(actualSpecPowerClinker-targetSpecPowerClinker) : null,
-      sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT', invert:true,
+      sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT'+(actualSpecPowerClinker===null?'<br>'+consumptionPower.clinkerReason:''), invert:true,
       hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker}},
     {label:'Quality Conformance', value: fmt(qConform,0), unit:'%', delta: qConform-90, sub: qOk+' / '+qTotal+' params in range',
       hover: { kind:'note', title:'Quality Conformance', badge:'SAMPLE',
