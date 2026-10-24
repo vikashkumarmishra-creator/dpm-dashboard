@@ -730,9 +730,10 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
   <div class="section">
     <div class="panel panel-pad">
       <div class="section-head" style="margin-bottom:6px;">
-        <h2>Availability &mdash; By Responsible Department</h2>
+        <h2>Reliability &mdash; Section-wise &amp; Department-wise</h2>
         <div class="section-toolbar">
-          <select class="select-input" id="availDeptSectionSelect"></select>
+          <select class="select-input" id="reliabilityGroupSelect" aria-label="Reliability grouping"><option value="section">Section-wise</option><option value="department">Department-wise</option></select>
+          <select class="select-input" id="availDeptSectionSelect" aria-label="Reliability section" hidden></select>
           <div class="control-group" style="margin:0;">
             <button class="preset-btn active" id="availDeptViewChartBtn">Chart</button>
             <button class="preset-btn" id="availDeptViewTableBtn">Table</button>
@@ -741,9 +742,9 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
       </div>
       <details class="info-toggle" style="margin:0 0 4px;">
         <summary>&#9432; What does this chart show? &mdash; click for details</summary>
-        <p class="hint" id="availDeptNote">Actual Availability per department isolates that department's own Breakdown hours (Plant Stoppage log, "Responsible&nbsp;Department" column; Delayed hours are excluded here since Delayed now sits alongside Planned Stoppage in the Planned Hours formula, not against Availability) against Planned Hours &mdash; every other Responsible Department value (S&amp;D, QC, HR, Plant Development, CPP, IT, etc.) is excluded, same convention as the MTBF &mdash; By Responsible Department chart above. Target Availability per department = your percentage split (Mechanical 95%, Process 4%, Electrical 0.5%, Instrument 0.5%), same convention as the MTBF department targets.</p>
+        <p class="hint" id="availDeptNote">Reliability Factor = Running Hours / (Running Hours + Breakdown Hours) x 100. Planned stoppages and delayed hours are excluded. Target 95%.</p>
       </details>
-      <div class="chart-box" id="availDeptChartBox" style="max-width:760px; margin:0 auto;"><canvas id="availDeptChart" height="230"></canvas></div>
+      <div class="chart-box" id="availDeptChartBox" style="max-width:1100px; margin:0 auto;"><canvas id="availDeptChart" height="230"></canvas></div>
       <div id="availDeptTableBox" style="display:none;" class="table-wrap"><table id="availDeptTable"></table></div>
     </div>
   </div>
@@ -894,6 +895,7 @@ let REAL_STOPPAGE_DEPT = RESOURCE.real_stoppage_dept_daily || {};
 // every calendar day it spans (Stop Date with Time -> Start Date with Time), same convention as
 // the live Apps Script refresh path. REAL_STOPPAGE_DEPT_HRS[physicalSectionKey][dateISO][deptCanonical] = hours.
 let REAL_STOPPAGE_DEPT_HRS = RESOURCE.real_stoppage_dept_bd_hrs_daily || {};
+let RELIABILITY_DEPT_AVAILABLE = Object.keys(REAL_STOPPAGE_DEPT_HRS).length>0;
 // Per your correction: Mechanical/Process/Electrical/Instrument targets are NOT fixed hour
 // values -- they're percentage shares (summing to 100%) of whichever section's (or, for Plant
 // Overall, the plant's) real Target MTBF for the CURRENT window, straight from MTBF.xlsx's
@@ -1254,37 +1256,6 @@ function plannedHoursForWindow(secKey, dateFrom, dateTo){
   const nDays = daysBetween(dateFrom, dateTo) || 1;
   const calendarHours = calendarHoursFor(secKey, nDays);
   return { plannedHours: calendarHours - stop.plannedHrs - stop.delayedHrs, live: stop.covered>0, full: stop.full };
-}
-// Actual Availability % for one department, ISOLATING that department's own downtime -- i.e.
-// what Availability would read if only this department's Breakdown hours (Responsible
-// Department column, Plant Stoppage log; Delayed excluded, per your instruction) counted against
-// Planned Hours. `choice` is either
-// '__PLANT__' (sums downtime hours and Planned Hours across the 7 physical sections first, then
-// divides -- same total/total convention used everywhere else "Plant Overall" appears on this
-// page) or one of MTBF_PHYSICAL_SECTIONS.
-function deptAvailability(choice, dept, dateFrom, dateTo){
-  const isPlant = choice === '__PLANT__';
-  let plannedHours = 0, live = false, full = true;
-  if(isPlant){
-    MTBF_PHYSICAL_SECTIONS.forEach(s=>{
-      const p = plannedHoursForWindow(s, dateFrom, dateTo);
-      plannedHours += p.plannedHours;
-      if(p.live) live = true;
-      if(!p.full) full = false;
-    });
-  } else {
-    const p = plannedHoursForWindow(choice, dateFrom, dateTo);
-    plannedHours = p.plannedHours; live = p.live; full = p.full;
-  }
-  const deptHrs = isPlant ? plantDeptDowntimeHours(dept, dateFrom, dateTo) : realDeptDowntimeHours(choice, dept, dateFrom, dateTo);
-  const avail = plannedHours>0 ? Math.max(0, Math.min(100, (plannedHours - deptHrs)/plannedHours*100)) : null;
-  return { avail, live, full };
-}
-// Target Availability % for one department = your percentage split directly (Mechanical 95%,
-// Process 4%, Electrical 0.5%, Instrument 0.5%), same convention as the MTBF -- By Responsible
-// Department targets, per your correction. Fixed -- does not vary by section.
-function deptTargetAvailability(dept){
-  return MTBF_DEPT_PCT[dept] * 100;
 }
 // Real Target MTBF (hours) for one physical section, for the calendar month the END of the
 // currently selected window falls in -- straight from MTBF.xlsx's "Target" worksheet (real,
@@ -2988,73 +2959,83 @@ function renderMtbfDeptTable(labels, actual, target, noteHtml){
   table.innerHTML = html;
 }
 
-/* ============================= Availability -- By Responsible Department (chart + table) =====
-   Both Chart and Table are scoped to whichever section (or "Plant Overall") is selected in the
-   dropdown -- 4 rows/bars (Mechanical/Process/Electrical/Instrument), Actual vs Target -- same
-   UX as the MTBF -- By Responsible Department chart/table above (switching the dropdown updates
-   both views; switching Chart/Table just changes how the SAME selection is displayed). Actual
-   isolates that department's own Breakdown hours (Plant Stoppage log; Delayed excluded, per your
-   instruction) against Planned Hours; Target is your fixed percentage split (95/4/0.5/0.5), same convention as MTBF's
-   department targets. See deptAvailability/deptTargetAvailability above for the formulas. */
+// Cement-industry Reliability Factor: operating hours / (operating + incident hours).
+// Match PMS and stoppage coverage by day before summing; never average daily percentages.
+function reliabilityHours(sec, dateFrom, dateTo, dept){
+  const stopKey = MTBF_STOPPAGE_KEY[sec] || sec;
+  const runKeys = sec==='Cement Mill' ? ['Cement Mill PPC','Cement Mill OPC'] : [sec];
+  const bounds = effectiveStoppageBounds()[stopKey];
+  const days = isoRangeDays(dateFrom,dateTo);
+  let run=0, breakdown=0, covered=0;
+  days.forEach(d=>{
+    if(!bounds || d<bounds.min || d>bounds.max) return;
+    if(!runKeys.every(k=>{const b=REAL_ACTUAL_BOUNDS[k];return b && d>=b.min && d<=b.max;})) return;
+    if(dept && !RELIABILITY_DEPT_AVAILABLE) return;
+    covered++;
+    runKeys.forEach(k=>{run += ((REAL_ACTUAL[k]||{})[d]||{}).run||0;});
+    breakdown += dept ? (((REAL_STOPPAGE_DEPT_HRS[stopKey]||{})[d]||{})[dept]||0)
+      : (((REAL_STOPPAGE[stopKey]||{})[d]||{}).bd_hrs||0);
+  });
+  return {run,breakdown,covered,total:days.length};
+}
+function reliabilityResult(choice, dateFrom, dateTo, dept){
+  const sections=choice==='__PLANT__'?MTBF_PHYSICAL_SECTIONS:[choice];
+  const totals=sections.reduce((a,s)=>{
+    const h=reliabilityHours(s,dateFrom,dateTo,dept);
+    for(const k of ['run','breakdown','covered','total'])a[k]+=h[k];
+    return a;
+  },{run:0,breakdown:0,covered:0,total:0});
+  const denominator=totals.run+totals.breakdown;
+  return {...totals,value:totals.covered>0 && denominator>0?totals.run/denominator*100:null,
+    full:totals.covered===totals.total && totals.total>0,live:totals.covered>0};
+}
 let availDeptChartInstance = null;
 function populateAvailDeptSelector(){
-  const sel = document.getElementById('availDeptSectionSelect');
-  if(!sel) return;
-  sel.innerHTML = '<option value="__PLANT__">Plant Overall</option>'
-    + MTBF_PHYSICAL_SECTIONS.map(s=>`<option value="${s}">${s==='Coal Mill'?'Fuel Mill':s}</option>`).join('');
-  sel.value = '__PLANT__';
-  sel.addEventListener('change', renderAvailDeptChart);
+  const sel=document.getElementById('availDeptSectionSelect');
+  if(!sel)return;
+  sel.innerHTML='<option value="__PLANT__">Plant Overall</option>'+MTBF_PHYSICAL_SECTIONS.map(s=>`<option value="${s}">${s==='Coal Mill'?'Fuel Mill':s}</option>`).join('');
+  sel.value='__PLANT__';
+  sel.addEventListener('change',renderAvailDeptChart);
+  document.getElementById('reliabilityGroupSelect').addEventListener('change',renderAvailDeptChart);
+}
+function reliabilityCoverageBadge(r){
+  if(!r.live)return '<span class="chip sample">DATA NOT AVAILABLE</span>';
+  return '<span class="chip live">LIVE'+(r.full?'':' (partial)')+'</span>';
 }
 function renderAvailDeptChart(){
-  const sel = document.getElementById('availDeptSectionSelect');
-  if(!sel) return;
-  const choice = sel.value;
-  const results = MTBF_DEPT_LIST.map(d => deptAvailability(choice, d, state.dateFrom, state.dateTo));
-  const actual = results.map(r => r.avail);
-  const target = MTBF_DEPT_LIST.map(d => deptTargetAvailability(d));
-  const coverageFull = results.every(r => r.full && r.live);
-  const coverageLive = results.some(r => r.live);
-  const scopeLabel = choice==='__PLANT__' ? 'Plant Overall' : (choice==='Coal Mill'?'Fuel Mill':choice);
-  const badge = coverageFull
-    ? '<span class="chip live" style="vertical-align:middle"><span class="chip-dot"></span>LIVE</span>'
-    : coverageLive
-    ? '<span class="chip live" style="vertical-align:middle"><span class="chip-dot"></span>LIVE (partial)</span>'
-    : '<span class="chip sample" style="vertical-align:middle">DATA NOT AVAILABLE</span>';
-  const noteHtml = badge + ' Actual Availability for <b>' + scopeLabel + '</b>, per department, isolates that department&rsquo;s own Breakdown hours (Plant Stoppage log, &quot;Responsible&nbsp;Department&quot; column; Delayed hours excluded here since Delayed now sits alongside Planned Stoppage in the Planned Hours formula, not against Availability) against Planned Hours (Calendar Hours &minus; [Planned Stoppage Hours + Delayed Hours]) &mdash; i.e. what Availability would read if only that department&rsquo;s breakdowns happened. Every other Responsible Department value (S&amp;D, QC, HR, Plant Development, CPP, IT, etc.) is excluded, same convention as the MTBF &mdash; By Responsible Department chart above.'
-    + ' Target Availability per department = your percentage split (Mechanical 95%, Process 4%, Electrical 0.5%, Instrument 0.5%), same convention as the MTBF department targets.';
-  const note = document.getElementById('availDeptNote');
-  if(note) note.innerHTML = noteHtml;
-  const ctx = document.getElementById('availDeptChart').getContext('2d');
-  if(availDeptChartInstance) availDeptChartInstance.destroy();
-  availDeptChartInstance = new Chart(ctx, {
-    type:'bar',
-    data:{
-      labels: MTBF_DEPT_LIST,
-      datasets:[
-        {label:'Actual Availability (%, this window)', data: actual, backgroundColor: css('--series-2'), borderRadius:4, maxBarThickness:64},
-        {label:'Target Availability (%)', data: target, backgroundColor: css('--series-1'), borderRadius:4, maxBarThickness:64},
-      ]
-    },
-    options: chartBaseOptions('%')
+  const sel=document.getElementById('availDeptSectionSelect');
+  if(!sel)return;
+  const byDept=document.getElementById('reliabilityGroupSelect').value==='department';
+  sel.hidden=!byDept;
+  const choice=sel.value;
+  const keys=byDept?MTBF_DEPT_LIST:['__PLANT__',...MTBF_PHYSICAL_SECTIONS];
+  const labels=keys.map(k=>k==='__PLANT__'?'Plant Overall':k==='Coal Mill'?'Fuel Mill':k);
+  const results=keys.map(k=>reliabilityResult(byDept?choice:k,state.dateFrom,state.dateTo,byDept?k:null));
+  const scope=byDept?'Department-wise for '+(choice==='__PLANT__'?'Plant Overall':choice==='Coal Mill'?'Fuel Mill':choice):'Section-wise';
+  const noteHtml='<b>'+scope+'</b>: Reliability Factor = Running Hours &divide; (Running Hours + Breakdown Hours) &times; 100. '
+    +'Running hours: PMS logs. Breakdown hours: Plant Stoppage log, type Breakdown only. Planned stoppages and delayed hours are excluded; planned hours are not used. '
+    +(byDept?'Each department uses only its own attributed breakdown hours against the selected scope&rsquo;s running hours. Mechanical, Process, Electrical and Instrument are shown; other/unassigned departments remain included in section totals. ':'Section totals include all breakdown departments. ')
+    +'Plant Overall totals hours across seven physical sections before dividing; PPC and OPC share one Cement Mill. Only dates covered by both logs are included; partial coverage is labelled. No running or breakdown hours gives N/A. Target: 95% for every row. '
+    +'<a href="https://www.researchgate.net/publication/327402134_Effect_of_Computerized_Maintenance_Management_System_on_a_Cement_Production_Plant" target="_blank" rel="noopener noreferrer">Formula reference: cement-plant reliability study</a>.';
+  document.getElementById('availDeptNote').innerHTML=noteHtml;
+  if(availDeptChartInstance)availDeptChartInstance.destroy();
+  const options=chartBaseOptions('%');
+  options.scales=options.scales||{};options.scales.y={...(options.scales.y||{}),min:0,max:100};
+  availDeptChartInstance=new Chart(document.getElementById('availDeptChart').getContext('2d'),{
+    type:'bar',data:{labels,datasets:[
+      {label:'Actual Reliability (%)',data:results.map(r=>r.value),backgroundColor:css('--series-2'),borderRadius:4,maxBarThickness:48},
+      {label:'Target Reliability (%)',data:keys.map(()=>95),backgroundColor:css('--series-1'),borderRadius:4,maxBarThickness:48}
+    ]},options
   });
-  renderAvailDeptTable(MTBF_DEPT_LIST, results, target, noteHtml);
+  renderAvailDeptTable(labels,results,byDept?'Department':'Section',noteHtml);
 }
-function renderAvailDeptTable(labels, results, target, noteHtml){
-  const table = document.getElementById('availDeptTable');
-  if(!table) return;
-  let html = '<thead><tr><th style="text-align:left;">Department</th><th>Actual Availability</th><th>Target Availability</th><th>Coverage</th></tr></thead><tbody>';
-  labels.forEach((d,i)=>{
-    const r = results[i];
-    const badge = r.full
-      ? '<span class="chip live"><span class="chip-dot"></span>LIVE</span>'
-      : r.live
-      ? '<span class="chip live">LIVE (partial)</span>'
-      : '<span class="chip sample">DATA NOT AVAILABLE</span>';
-    html += `<tr><td class="rowhead">${d}</td><td${tt('Actual Availability for '+d+' = (Planned Hours − '+d+'\'s own Breakdown hours, Delayed excluded) ÷ Planned Hours x 100, isolating just this department\'s breakdowns against the selected scope\'s Planned Hours.')}>${r.avail!=null?fmt(r.avail,1)+'%':'&mdash;'}</td><td${tt('Target Availability for '+d+' = your fixed percentage split (Mechanical 95%, Process 4%, Electrical 0.5%, Instrument 0.5%).')}>${fmt(target[i],2)}%</td><td${tt('Whether the Actual Availability figure is real data (LIVE/LIVE partial) or has no real coverage for this window (left blank rather than guessed).')}>${badge}</td></tr>`;
-  });
-  html += `</tbody><tfoot><tr><td colspan="4" style="font-size:11px; color:var(--text-muted); padding-top:8px;">${noteHtml}</td></tr></tfoot>`;
-  table.innerHTML = html;
+function renderAvailDeptTable(labels,results,groupLabel,noteHtml){
+  const table=document.getElementById('availDeptTable');if(!table)return;
+  table.innerHTML='<thead><tr><th style="text-align:left;">'+groupLabel+'</th><th>Running Hours</th><th>Breakdown Hours</th><th>Actual Reliability</th><th>Target Reliability</th><th>Coverage</th></tr></thead><tbody>'
+    +labels.map((label,i)=>{const r=results[i];return `<tr><td class="rowhead">${label}</td><td>${r.live?fmt(r.run,2):'&mdash;'}</td><td>${r.live?fmt(r.breakdown,2):'&mdash;'}</td><td>${r.value!=null?fmt(r.value,2)+'%':'N/A'}</td><td>95%</td><td>${reliabilityCoverageBadge(r)} <small>${r.covered}/${r.total} ${label==='Plant Overall' || groupLabel==='Department' && document.getElementById('availDeptSectionSelect').value==='__PLANT__'?'section-days':'days'}</small></td></tr>`;}).join('')
+    +'</tbody><tfoot><tr><td colspan="6" style="font-size:11px;color:var(--text-muted);">'+noteHtml+'</td></tr></tfoot>';
 }
+
 
 function chartBaseOptions(unit){
   return {
@@ -4082,7 +4063,8 @@ async function fetchPublishedStoppageCsv(){
 // the two disagree, so a mismatch is visible in the refresh status rather than silently resolved.
 function pickFresherStoppage(appsScript, csv){
   const secKeys = new Set([...Object.keys(appsScript.bounds||{}), ...Object.keys(csv.bounds||{})]);
-  const data = {}, bounds = {}, deptData = {};
+  const data = {}, bounds = {}, deptData = {}, deptHours = {};
+  let deptHoursAvailable = true;
   const notes = [];
   secKeys.forEach(sec=>{
     const ba = appsScript.bounds[sec], bc = csv.bounds[sec];
@@ -4096,11 +4078,13 @@ function pickFresherStoppage(appsScript, csv){
       winner = ba ? appsScript : csv;
     }
     if(winner.data[sec]) data[sec] = winner.data[sec];
+    if(winner.deptHours && winner.deptHours[sec]) deptHours[sec] = winner.deptHours[sec];
+    if(!winner.deptHoursAvailable) deptHoursAvailable = false;
     if(winner.bounds[sec]) bounds[sec] = winner.bounds[sec];
     if(winner.deptData && winner.deptData[sec]) deptData[sec] = winner.deptData[sec];
   });
   const errors = (appsScript.errors||[]).concat(csv.errors||[]).concat(notes);
-  return { data, bounds, deptData, errors };
+  return { data, bounds, deptData, deptHours, deptHoursAvailable, errors };
 }
 // Refreshes Target/Min/Max/Unit for every parameter from the Apps Script payload's
 // Dim_Parameter / Dim_Parameter_Cement tables, merging straight into PARAM_LOOKUP /
@@ -4468,6 +4452,8 @@ function refreshLiveStoppage(payload){
   // Counted once per event on its FIRST day only (same convention as bd_cnt itself below), not
   // once per day a multi-day event spans.
   const deptData = {};
+  const deptHours = {};
+  let deptHoursAvailable = false;
   const DEPT_CANON = { mechanical:'Mechanical', process:'Process', electrical:'Electrical', instrument:'Instrument' };
   const SEC_CANON = {
     'additive crusher':'Additive Crusher', 'crusher':'Crusher', 'raw mill':'Raw Mill', 'coal mill':'Coal Mill',
@@ -4489,9 +4475,15 @@ function refreshLiveStoppage(payload){
     const byDate = (bySec[iso] = bySec[iso] || {});
     byDate[deptCanon] = (byDate[deptCanon]||0) + 1;
   }
+  function addDeptHours(sec,iso,dept,hours){
+    if(!dept)return;
+    const bySec=deptHours[sec]||(deptHours[sec]={});
+    const byDate=bySec[iso]||(bySec[iso]={});
+    byDate[dept]=(byDate[dept]||0)+hours;
+  }
   const ws = 'Process HOD File';
   const rows = payload.worksheets && payload.worksheets[ws];
-  if(!rows){ errors.push('worksheet "'+ws+'" not found in the Apps Script response -- check the tab name matches exactly and the script includes it'); return {data, bounds, errors, deptData}; }
+  if(!rows){ errors.push('worksheet "'+ws+'" not found in the Apps Script response -- check the tab name matches exactly and the script includes it'); return {data, bounds, errors, deptData, deptHours, deptHoursAvailable}; }
   const dCol = findColLive(rows,'Date'), secCol = findColLive(rows,'Section'), typeCol = findColLive(rows,'Type of Stoppage');
   const stopCol = findColLive(rows,'Stop Date with Time'), startCol = findColLive(rows,'Start Date with Time');
   // "Total Stopage_Dur" is the Apps Script tab's own (oddly-spelled) column name for a single
@@ -4505,6 +4497,7 @@ function refreshLiveStoppage(payload){
   // keepCols. Degrades gracefully: deptData just stays empty, and the "By Responsible Department"
   // chart shows a NO DATA badge instead of silently guessing.
   const deptCol = findColLive(rows,'Responsible Department');
+  deptHoursAvailable = !!deptCol;
   if(!dCol || !secCol || !typeCol){
     // Name exactly which required column(s) are missing and list the headers actually present in
     // this row-set, so a mismatch (e.g. the published sheet using different header text than the
@@ -4516,7 +4509,7 @@ function refreshLiveStoppage(payload){
     if(!typeCol) missing.push('"Type of Stoppage"');
     const actualHeaders = rows.length ? Object.keys(rows[0]).map(h=>'"'+h+'"').join(', ') : '(no rows)';
     errors.push(ws+': could not find column(s) '+missing.join(', ')+' -- headers actually present: '+actualHeaders);
-    return {data, bounds, errors, deptData};
+    return {data, bounds, errors, deptData, deptHours, deptHoursAvailable};
   }
   if(!durCol && (!stopCol || !startCol)){
     errors.push(ws+': no duration column ("Total Stopage_Dur"/"Total Stoppage"/"Duration") and no usable "Stop Date with Time"/"Start Date with Time" pair -- rows without a parseable pair of those two will be counted with 0 duration.');
@@ -4555,6 +4548,7 @@ function refreshLiveStoppage(payload){
           patch[key] = hours;
           if(firstSeg && key==='bd_hrs'){ patch.bd_cnt = 1; if(deptCanon) addDeptRec(sec, iso, deptCanon); }
           addRec(sec, iso, patch);
+          if(deptCanon) addDeptHours(sec,iso,deptCanon,hours);
           firstSeg = false;
         }
         dayStart = new Date(dayStart.getTime() + DAY_MS);
@@ -4568,6 +4562,7 @@ function refreshLiveStoppage(payload){
       const patch = {bd_cnt: (key==='bd_hrs')?1:0, bd_hrs:0, planned_hrs:0, delayed_hrs:0};
       patch[key] = dur;
       addRec(sec, iso, patch);
+      if(deptCanon) addDeptHours(sec,iso,deptCanon,dur);
       if(deptCanon) addDeptRec(sec, iso, deptCanon);
     }
   });
@@ -4588,7 +4583,7 @@ function refreshLiveStoppage(payload){
       errors.push('Process HOD File: Cement Mill\'s stoppage log currently reaches through '+b.max+' only, while your other sections\' stoppage logs already reach through '+stopReferenceMax+' -- that gap also contributes to Cement Mill\'s partial "(n/Nd)" LIVE badge.');
     }
   }
-  return {data, bounds, errors, deptData};
+  return {data, bounds, errors, deptData, deptHours, deptHoursAvailable};
 }
 // Live Power (kWh) per section per day, from the DMS Electrical "Transpose Main Cement Plant
 // Electrical for Process" sheet. Validated exact match against every historical day across all
@@ -4957,7 +4952,7 @@ async function doLiveQualityRefresh(){
       // too -- see refreshLiveProduction -- this just guards against a section missing from a
       // future payload, e.g. a renamed/missing worksheet).
       if(gotProd){ REAL_ACTUAL = Object.assign({}, REAL_ACTUAL, prodResult.data); REAL_ACTUAL_BOUNDS = Object.assign({}, REAL_ACTUAL_BOUNDS, prodResult.bounds); }
-      if(gotStop){ REAL_STOPPAGE = Object.assign({}, REAL_STOPPAGE, stopResult.data); REAL_STOPPAGE_BOUNDS = Object.assign({}, REAL_STOPPAGE_BOUNDS, stopResult.bounds); REAL_STOPPAGE_DEPT = Object.assign({}, REAL_STOPPAGE_DEPT, stopResult.deptData); }
+      if(gotStop){ REAL_STOPPAGE = Object.assign({}, REAL_STOPPAGE, stopResult.data); REAL_STOPPAGE_BOUNDS = Object.assign({}, REAL_STOPPAGE_BOUNDS, stopResult.bounds); REAL_STOPPAGE_DEPT = Object.assign({}, REAL_STOPPAGE_DEPT, stopResult.deptData); REAL_STOPPAGE_DEPT_HRS = stopResult.deptHours; RELIABILITY_DEPT_AVAILABLE = stopResult.deptHoursAvailable; }
       if(gotPower){ REAL_POWER = Object.assign({}, REAL_POWER, powerResult.data); REAL_POWER_BOUNDS = Object.assign({}, REAL_POWER_BOUNDS, powerResult.bounds); }
       if(gotTargetProd){ REAL_TARGET = Object.assign({}, REAL_TARGET, targetProdResult.data); REAL_TARGET_BOUNDS = Object.assign({}, REAL_TARGET_BOUNDS, targetProdResult.bounds); }
       if(gotAdditive){ ['Cement Mill PPC','Cement Mill OPC'].forEach(sec=>{ if(Object.keys(clinkerResult.additive[sec]).length){ REAL_CEMENT_ADDITIVE[sec]=clinkerResult.additive[sec]; REAL_CEMENT_ADDITIVE_BOUNDS[sec]=clinkerResult.additiveBounds[sec]; } }); }
