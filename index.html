@@ -1560,6 +1560,151 @@ function computeAvailUtilForDepts(depts, dateFrom, dateTo){
 function computePlantAvailUtil(dateFrom, dateTo){
   return computeAvailUtilForDepts(KPI_PHYSICAL_DEPTS, dateFrom, dateTo);
 }
+// Consumption allocation from Power Calculation.xlsx, Sheet1.
+// All quantities and energies must cover the same selected reporting window.
+function calculateConsumptionSpecificPower(input) {
+  const valid = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const ratio = (energy, production) => valid(energy) && valid(production) && production > 0 ? energy / production : null;
+  const allocate = (energy, production, consumed) => {
+    if (energy === 0 && production === 0 && consumed === 0) return 0;
+    const specific = ratio(energy, production);
+    return specific !== null && valid(consumed) ? specific * consumed : null;
+  };
+  const rawConsumed = valid(input.kilnFeed) && valid(input.returnDustFraction) && input.returnDustFraction <= 1
+    ? input.kilnFeed * (1 - input.returnDustFraction) : null;
+  const limestoneConsumed = rawConsumed !== null && valid(input.limestoneFraction) && input.limestoneFraction <= 1
+    ? rawConsumed * input.limestoneFraction : null;
+  const additiveConsumed = valid(input.rawMillAdditiveConsumed) && valid(input.cementBlackFlyAshConsumed)
+    ? input.rawMillAdditiveConsumed + input.cementBlackFlyAshConsumed : null;
+  const sections = [
+    { label: 'Additive Crusher', consumed: additiveConsumed, production: input.additiveProduction, energy: input.additiveKwh },
+    { label: 'LS Crusher', consumed: limestoneConsumed, production: input.limestoneProduction, energy: input.limestoneKwh },
+    { label: 'Raw Mill', consumed: rawConsumed, production: input.rawMillProduction, energy: input.rawMillKwh },
+    { label: 'Coal Mill', consumed: input.fuelConsumed, production: input.fuelProduction, energy: input.fuelKwh },
+  ].map(row => ({ ...row, specific: ratio(row.energy, row.production), allocatedKwh: allocate(row.energy, row.production, row.consumed) }));
+  sections.push({ label: 'Kiln', consumed: input.clinkerProduction, production: input.clinkerProduction,
+    energy: input.kilnKwh, specific: ratio(input.kilnKwh, input.clinkerProduction), allocatedKwh: valid(input.kilnKwh) ? input.kilnKwh : null });
+  const clinkerKwh = sections.every(row => row.allocatedKwh !== null)
+    ? sections.reduce((sum, row) => sum + row.allocatedKwh, 0) : null;
+  const clinkerSpecific = ratio(clinkerKwh, input.clinkerProduction);
+  // Preserve the dashboard's authoritative cement total, independently of displayed
+  // PPC/OPC production rounding. Keep full precision until the card is formatted.
+  const weightedClinkerQty = [input.ppcProduction, input.opcProduction, input.ppcClinkerFactorPct, input.opcClinkerFactorPct].every(valid)
+    && input.ppcClinkerFactorPct <= 100 && input.opcClinkerFactorPct <= 100
+    ? (input.ppcProduction * input.ppcClinkerFactorPct + input.opcProduction * input.opcClinkerFactorPct) / 100 : null;
+  const overallClinkerFactor = ratio(weightedClinkerQty, input.cementProduction);
+  const cementGrindingKwh = valid(input.ppcKwh) && valid(input.opcKwh) ? input.ppcKwh + input.opcKwh : null;
+  const cementGrindingSpecific = ratio(cementGrindingKwh, input.cementProduction);
+  const cementSpecific = clinkerSpecific !== null && overallClinkerFactor !== null && cementGrindingSpecific !== null
+    ? clinkerSpecific * overallClinkerFactor + cementGrindingSpecific : null;
+  return { sections, clinkerKwh, clinkerSpecific, overallClinkerFactor, cementGrindingKwh, cementGrindingSpecific, cementSpecific };
+}
+if (typeof module !== 'undefined') module.exports = { calculateConsumptionSpecificPower };
+
+// Dedicated consumption inputs for the two specific-power cards only.
+let REAL_SPECIFIC_POWER_INPUTS = RESOURCE.real_specific_power_inputs_daily || {};
+
+function refreshLiveSpecificPowerInputs(payload) {
+  const data = {}, errors = [];
+  const mappings = [
+    {ws:'PMS Raw Mill', fields:{rawMillAdditiveConsumed:'Clay WF 04 dry qty_RM', limestoneDry1:'Crushed LS WF 01 dry qty_RM', limestoneDry2:'Crushed LS WF 02 dry qty_RM', rawDryProduction:'Production_In_Dry_RM_RM'}},
+    {ws:'PMS Kiln', fields:{kilnFeed:'Kiln Feed TPH (Process Value)', fuelMB:'MB process value (TPH)', fuelPC:'PC Process value (TPH)'}},
+    {ws:'PMS Cement Mill (VRPM+Ball Mill)', fields:{cementBlackFlyAshConsumed:'Specific Power Black Fly Ash Dry Qty'}},
+  ];
+  mappings.forEach(({ws,fields})=>{
+    const rows = payload.worksheets && payload.worksheets[ws];
+    if(!rows || !rows.length){ errors.push(ws+': consumption inputs unavailable for Specific Power cards'); return; }
+    // Exact normalized names only: a missing alias must never select the other
+    // duplicate Black Fly Ash Dry Qty column through substring matching.
+    const exactCol = name => Object.keys(rows[0]).find(key=>normColName(key)===normColName(name));
+    const dCol = exactCol('Actual Date');
+    if(!dCol){ errors.push(ws+': Actual Date missing for Specific Power cards'); return; }
+    Object.entries(fields).forEach(([field,name])=>{
+      const col = exactCol(name);
+      if(!col){ errors.push(ws+': '+name+' missing for Specific Power cards'); return; }
+      rows.forEach(row=>{
+        const d = parseGvizDate(row[dCol]) || (typeof row[dCol]==='string' ? new Date(row[dCol]) : null);
+        if(!d || isNaN(d)) return;
+        const iso = toISO(d), value = numOrNull(row[col]);
+        if(value===null || !Number.isFinite(value) || value<0) return;
+        const rec = data[iso] || (data[iso]={});
+        rec[field] = (rec[field] || 0) + value;
+      });
+    });
+  });
+  return {data,errors};
+}
+
+function computeConsumptionPowerWindow(dateFrom,dateTo) {
+  const days = isoRangeDays(dateFrom,dateTo);
+  const fields = ['rawMillAdditiveConsumed','limestoneDry1','limestoneDry2','rawDryProduction','kilnFeed','fuelMB','fuelPC','cementBlackFlyAshConsumed'];
+  const totals = {}, missing = [];
+  fields.forEach(field=>{
+    const complete = days.length>0 && days.every(iso=>Number.isFinite((REAL_SPECIFIC_POWER_INPUTS[iso]||{})[field]));
+    totals[field] = complete ? days.reduce((sum,iso)=>sum+REAL_SPECIFIC_POWER_INPUTS[iso][field],0) : null;
+    if(!complete) missing.push(field);
+  });
+  const input = {
+    ...totals, returnDustFraction:0.04,
+    limestoneFraction:totals.rawDryProduction>0 && totals.limestoneDry1!==null && totals.limestoneDry2!==null
+      ? (totals.limestoneDry1+totals.limestoneDry2)/totals.rawDryProduction : null,
+    fuelConsumed:totals.fuelMB!==null && totals.fuelPC!==null ? totals.fuelMB+totals.fuelPC : null,
+  };
+  const sectionMap = [
+    ['Additive Crusher','additiveProduction','additiveKwh'],['Crusher','limestoneProduction','limestoneKwh'],
+    ['Raw Mill','rawMillProduction','rawMillKwh'],['Coal Mill','fuelProduction','fuelKwh'],['Kiln','clinkerProduction','kilnKwh'],
+  ];
+  sectionMap.forEach(([section,prodField,kwhField])=>{
+    const prod = realActualSum(section,dateFrom,dateTo);
+    input[prodField] = prod.full ? prod.prod : null;
+    const coverage = coverageInfo(REAL_POWER_BOUNDS,section,days);
+    const series = REAL_POWER[section] || {};
+    input[kwhField] = coverage.covered===coverage.total && days.every(iso=>Number.isFinite(series[iso]))
+      ? days.reduce((sum,iso)=>sum+series[iso],0) : null;
+    if(input[prodField]===null || input[kwhField]===null) missing.push(section+' production/power');
+  });
+  const ppc = realActualSum('Cement Mill PPC',dateFrom,dateTo), opc = realActualSum('Cement Mill OPC',dateFrom,dateTo);
+  input.ppcProduction = ppc.full ? ppc.prod : null;
+  input.opcProduction = opc.full ? opc.prod : null;
+  input.cementProduction = input.ppcProduction!==null && input.opcProduction!==null ? input.ppcProduction+input.opcProduction : null;
+  const ppcCF = realClinkerFactorActual('Cement Mill PPC',dateFrom,dateTo), opcCF = realClinkerFactorActual('Cement Mill OPC',dateFrom,dateTo);
+  input.ppcClinkerFactorPct = ppc.full && ppc.prod===0 ? 0 : (ppcCF.full ? ppcCF.actual : null);
+  input.opcClinkerFactorPct = opc.full && opc.prod===0 ? 0 : (opcCF.full ? opcCF.actual : null);
+  const cementPower = REAL_POWER['Cement Mill'] || {};
+  const cementPowerCoverage = coverageInfo(REAL_POWER_BOUNDS,'Cement Mill',days);
+  // One shared electrical meter: use its energy once, equivalent to PPC+OPC
+  // allocated energies in Sheet1, without double counting the physical mill.
+  input.ppcKwh = cementPowerCoverage.covered===cementPowerCoverage.total && days.every(iso=>Number.isFinite(cementPower[iso]))
+    ? days.reduce((sum,iso)=>sum+cementPower[iso],0) : null;
+  input.opcKwh = 0;
+  const result = calculateConsumptionSpecificPower(input);
+  return {...result,input,missing,badge:result.clinkerSpecific!==null?'LIVE':'SAMPLE'};
+}
+
+function buildConsumptionPowerHover(h) {
+  const c = h.calculation, input = c.input;
+  const missing = c.missing.length ? '<div class="kpi-hover-note">Missing source coverage: '+c.missing.join(', ')+'. Refresh live data for this date range.</div>' : '';
+  if(h.metric==='cement'){
+    return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.cementSpecific!==null?'LIVE':'SAMPLE')} Specific Power Till Cement</div>
+      <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:430px;"><thead><tr><th>Calculation</th><th>Actual</th></tr></thead><tbody>
+      <tr><td class="rowhead">Specific Power Till Clinkerization (unrounded)</td><td>${fmt(c.clinkerSpecific,5)} kWh/MT</td></tr>
+      <tr><td class="rowhead">Overall clinker factor: (PPC MT × PPC factor + OPC MT × OPC factor) ÷ total cement MT</td><td>${fmt(c.overallClinkerFactor===null?null:c.overallClinkerFactor*100,5)}%</td></tr>
+      <tr><td class="rowhead">Cement mill power (PPC + OPC, one meter)</td><td>${fmt(c.cementGrindingKwh,3)} kWh</td></tr>
+      <tr><td class="rowhead">Total cement production</td><td>${fmt(input.cementProduction,5)} MT</td></tr>
+      <tr><td class="rowhead">Cement grinding power ÷ cement production</td><td>${fmt(c.cementGrindingSpecific,5)} kWh/MT</td></tr>
+      </tbody><tfoot><tr><td class="rowhead">Clinkerization specific power × overall clinker factor + cement grinding specific power</td><td>${fmt(c.cementSpecific,2)} kWh/MT</td></tr>
+      <tr><td class="rowhead">Existing production-based target</td><td>${fmt(h.target,2)} kWh/MT</td></tr></tfoot></table></div>${missing}</div>`;
+  }
+  const rows=c.sections.map(row=>`<tr><td class="rowhead">${row.label}</td><td>${fmt(row.production,3)}</td><td>${fmt(row.energy,3)}</td><td>${fmt(row.specific,5)}</td><td>${fmt(row.consumed,3)}</td><td>${fmt(row.allocatedKwh,3)}</td></tr>`).join('');
+  return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.badge)} Specific Power Till Clinkerization</div>
+    <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:650px;"><thead><tr><th>Section</th><th>Production (MT)</th><th>Meter (kWh)</th><th>kWh/MT material</th><th>Consumed (MT)</th><th>Allocated kWh</th></tr></thead><tbody>${rows}</tbody><tfoot>
+    <tr><td class="rowhead" colspan="5">Total allocated power</td><td>${fmt(c.clinkerKwh,3)}</td></tr>
+    <tr><td class="rowhead" colspan="5">÷ Clinker production (MT)</td><td>${fmt(input.clinkerProduction,5)}</td></tr>
+    <tr><td class="rowhead" colspan="5">= Specific Power Till Clinkerization (kWh/MT)</td><td>${fmt(c.clinkerSpecific,1)}</td></tr>
+    <tr><td class="rowhead" colspan="5">Existing production-based target (kWh/MT)</td><td>${fmt(h.target,1)}</td></tr></tfoot></table></div>
+    <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Full source precision is retained; only displayed results are rounded.</div>${missing}</div>`;
+}
+
 function renderKPIs(){
   const grid = document.getElementById('kpiGrid');
 
@@ -1608,51 +1753,18 @@ function renderKPIs(){
   });
   const qConform = qTotal? (qOk/qTotal*100) : 0;
 
-  // ---- Specific Power Till Clinkerization: your formula --
-  // (target/actual Crusher production x target/actual Crusher power) + (...Raw Mill...) +
-  // (...Fuel Mill...) + (...Clinker/Kiln itself...), all divided by target/actual Clinker
-  // production. Uses the SAME real target/actual production & specific-power figures (with
-  // live/sample coverage) already computed by computeSectionRow for the Production & MTBF table
-  // below -- this card can never drift from that table's numbers.
+  // Consumption-adjusted ACTUAL calculations, following Power Calculation.xlsx / Sheet1.
+  // The existing production-based target benchmarks retain their original definitions.
   const CLINKER_CHAIN = ['Crusher','Raw Mill','Coal Mill','Kiln'];
   const clinkerChainRows = CLINKER_CHAIN.map(sec => ({sec, r: computeSectionRow(sec, state.dateFrom, state.dateTo)}));
-  const kilnChainRow = clinkerChainRows.find(x=>x.sec==='Kiln').r;
-  const targetKwhSumClinker = clinkerChainRows.reduce((sum,x)=> sum + x.r.targetProd*x.r.targetPower, 0);
-  // If ANY section in the chain has no real Actual Production or Actual Power for the window, the
-  // chain total is left blank (null) -- never a partial sum that silently treats a missing section
-  // as zero kWh and understates the specific power.
-  const mulOrNull = (a,b)=> (a==null || b==null) ? null : a*b;
-  const sumOrNull = (arr)=> arr.some(v=>v==null) ? null : arr.reduce((s,v)=>s+v,0);
-  const actualKwhSumClinker = sumOrNull(clinkerChainRows.map(x=> mulOrNull(x.r.actualProd, x.r.actualPower)));
-  const targetSpecPowerClinker = kilnChainRow.targetProd>0 ? targetKwhSumClinker/kilnChainRow.targetProd : null;
-  const actualSpecPowerClinker = (actualKwhSumClinker!=null && kilnChainRow.actualProd>0) ? actualKwhSumClinker/kilnChainRow.actualProd : null;
-  const clinkerChainAllFull = clinkerChainRows.every(x=> x.r.targetCoverage==='full' && x.r.powerCoverage==='full' && x.r.actualCoverage==='full');
-  const clinkerChainAnyLive = clinkerChainRows.some(x=> x.r.targetLive || x.r.actualLive || x.r.actualPowerLive);
-  const clinkerHoverBadge = clinkerChainAllFull ? 'LIVE' : (clinkerChainAnyLive ? 'LIVE (partial)' : 'SAMPLE');
-  const clinkerHoverRows = clinkerChainRows.map(x=> ({
-    label: x.sec==='Coal Mill' ? 'Fuel Mill' : (x.sec==='Kiln' ? 'Kiln (Clinker)' : x.sec),
-    targetProd: x.r.targetProd, targetPower: x.r.targetPower, targetKwh: x.r.targetProd*x.r.targetPower,
-    actualProd: x.r.actualProd, actualPower: x.r.actualPower, actualKwh: mulOrNull(x.r.actualProd, x.r.actualPower),
-  }));
-
-  // ---- Specific Power Till Cement: your "till Cement" formula -- the Clinkerization chain above
-  // PLUS Cement PPC & Cement OPC, divided by Cement (PPC+OPC) Production instead of Clinker
-  // Production. Reuses the same real computeSectionRow figures as the Cement Production card and
-  // the Production & MTBF table -- can't drift from either.
+  const targetKwhSumClinker = clinkerChainRows.reduce((sum,x)=>sum+x.r.targetProd*x.r.targetPower,0);
+  const targetSpecPowerClinker = clinkerTgt>0 ? targetKwhSumClinker/clinkerTgt : null;
   const CEMENT_CHAIN = ['Additive Crusher','Crusher','Raw Mill','Coal Mill','Kiln','Cement Mill PPC','Cement Mill OPC'];
-  const cementChainRows = CEMENT_CHAIN.map(sec => ({sec, r: computeSectionRow(sec, state.dateFrom, state.dateTo)}));
-  const targetKwhSumCement = cementChainRows.reduce((sum,x)=> sum + x.r.targetProd*x.r.targetPower, 0);
-  const actualKwhSumCement = sumOrNull(cementChainRows.map(x=> mulOrNull(x.r.actualProd, x.r.actualPower)));
+  const targetKwhSumCement = CEMENT_CHAIN.reduce((sum,sec)=>{ const r=computeSectionRow(sec,state.dateFrom,state.dateTo); return sum+r.targetProd*r.targetPower; },0);
   const targetSpecPowerCement = cementTgtTotal>0 ? targetKwhSumCement/cementTgtTotal : null;
-  const actualSpecPowerCement = (actualKwhSumCement!=null && cementTotal>0) ? actualKwhSumCement/cementTotal : null;
-  const cementChainAllFull = cementChainRows.every(x=> x.r.targetCoverage==='full' && x.r.powerCoverage==='full' && x.r.actualCoverage==='full');
-  const cementChainAnyLive = cementChainRows.some(x=> x.r.targetLive || x.r.actualLive || x.r.actualPowerLive);
-  const cementSpecPowerBadge = cementChainAllFull ? 'LIVE' : (cementChainAnyLive ? 'LIVE (partial)' : 'SAMPLE');
-  const cementSpecPowerRows = cementChainRows.map(x=> ({
-    label: x.sec==='Coal Mill' ? 'Fuel Mill' : (x.sec==='Kiln' ? 'Kiln (Clinker)' : (x.sec==='Cement Mill PPC' ? 'Cement PPC' : (x.sec==='Cement Mill OPC' ? 'Cement OPC' : x.sec))),
-    targetProd: x.r.targetProd, targetPower: x.r.targetPower, targetKwh: x.r.targetProd*x.r.targetPower,
-    actualProd: x.r.actualProd, actualPower: x.r.actualPower, actualKwh: mulOrNull(x.r.actualProd, x.r.actualPower),
-  }));
+  const consumptionPower = computeConsumptionPowerWindow(state.dateFrom,state.dateTo);
+  const actualSpecPowerClinker = consumptionPower.clinkerSpecific;
+  const actualSpecPowerCement = consumptionPower.cementSpecific;
 
   // ---- Clinker Factor -- PPC / OPC. Target = 100 - average(Total Additive %) over the window,
   // separately for PPC and OPC, from your Production Target sheet (columns BN/BV). Actual =
@@ -1711,24 +1823,14 @@ function renderKPIs(){
       hover: { kind:'hours', title:'Support Section Utilization = &Sigma; Running Hour &divide; &Sigma; Calendar Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant contributes double Calendar Hours since it combines two loading lines)',
         badge: supportAU.badge, rows: supportAU.rows, metric:'util', footLabel: 'Support Section',
         totalRun: supportAU.totalRun, totalPlanned: supportAU.totalPlanned, totalCalendar: supportAU.totalCalendar, result: supportAU.util } },
-    {label:'Specific Power Till Cement', value: fmt(actualSpecPowerCement,1), unit:'kWh/MT',
+    {label:'Specific Power Till Cement', value: fmt(actualSpecPowerCement,2), unit:'kWh/MT',
       delta: (targetSpecPowerCement!=null && actualSpecPowerCement!=null) ? -(actualSpecPowerCement-targetSpecPowerCement) : null,
-      sub: 'Target '+fmt(targetSpecPowerCement,1)+' kWh/MT', invert:true,
-      hover: { kind:'specpower', title:'Specific Power Till Cement = &Sigma;(Production &times; Specific Power) &divide; Cement Production &mdash; Additive Crusher, Crusher, Raw Mill, Fuel Mill, Kiln, Cement PPC &amp; Cement OPC',
-        badge: cementSpecPowerBadge, rows: cementSpecPowerRows,
-        targetTotal: targetKwhSumCement, actualTotal: actualKwhSumCement,
-        targetDenomLabel: 'Cement Prod (target)', actualDenomLabel: 'Cement Prod (actual)',
-        targetDenom: cementTgtTotal, actualDenom: cementTotal,
-        targetResult: targetSpecPowerCement, actualResult: actualSpecPowerCement } },
+      sub: 'Target '+fmt(targetSpecPowerCement,2)+' kWh/MT', invert:true,
+      hover: {kind:'consumptionpower', metric:'cement', calculation:consumptionPower, target:targetSpecPowerCement}},
     {label:'Specific Power Till Clinkerization', value: fmt(actualSpecPowerClinker,1), unit:'kWh/MT',
       delta: (targetSpecPowerClinker!=null && actualSpecPowerClinker!=null) ? -(actualSpecPowerClinker-targetSpecPowerClinker) : null,
       sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT', invert:true,
-      hover: { kind:'specpower', title:'Specific Power Till Clinkerization = &Sigma;(Production &times; Specific Power) &divide; Clinker Production &mdash; Crusher, Raw Mill, Fuel Mill &amp; Kiln (Clinker)',
-        badge: clinkerHoverBadge, rows: clinkerHoverRows,
-        targetTotal: targetKwhSumClinker, actualTotal: actualKwhSumClinker,
-        targetDenomLabel: 'Clinker Prod (target)', actualDenomLabel: 'Clinker Prod (actual)',
-        targetDenom: kilnChainRow.targetProd, actualDenom: kilnChainRow.actualProd,
-        targetResult: targetSpecPowerClinker, actualResult: actualSpecPowerClinker } },
+      hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker}},
     {label:'Quality Conformance', value: fmt(qConform,0), unit:'%', delta: qConform-90, sub: qOk+' / '+qTotal+' params in range',
       hover: { kind:'note', title:'Quality Conformance', badge:'SAMPLE',
         note: qOk+' of '+qTotal+' registered QMS parameters (real Min/Max/Target thresholds, from your parameter sheet) are modeled as in-range for this window &mdash; the in-range check itself is still a placeholder, not yet a live reading per parameter. Quality % from your real Bad Quality Production log exists elsewhere but is still being finalized (see the Production &amp; MTBF table\'s note) before it can drive this card.' } },
@@ -1810,6 +1912,7 @@ function kpiBadgeHtml(badge){
 // Availability/Utilization), a real Specific Power kWh breakdown (Clinkerization, Cement), or a
 // plain explanatory note for the one card still on modeled data (Quality Conformance).
 function buildKpiHoverPanel(h){
+  if(h.kind==='consumptionpower') return buildConsumptionPowerHover(h);
   if(h.kind==='note') return buildKpiNoteHoverPanel(h);
   if(h.kind==='prod') return buildKpiProdHoverTable(h);
   if(h.kind==='hours') return buildKpiHoursHoverTable(h);
@@ -4664,6 +4767,8 @@ async function doLiveQualityRefresh(){
     const clinkerResult = refreshLiveClinkerFactor(payload);
     const cppResult = refreshLiveCpp(payload);
     const spHeatResult = refreshLiveKilnSpecificHeat(payload);
+    const specificPowerResult = refreshLiveSpecificPowerInputs(payload);
+    REAL_SPECIFIC_POWER_INPUTS = specificPowerResult.data;
     const gotAny = Object.keys(data).length>0;
     const gotProd = Object.keys(prodResult.data).length>0;
     const gotStop = Object.keys(stopResult.data).length>0;
@@ -4675,7 +4780,7 @@ async function doLiveQualityRefresh(){
     const gotCppTarget = Object.keys(cppResult.targetDaily).some(k=>Object.keys(cppResult.targetDaily[k]).length>0);
     const gotSpHeatTarget = Object.keys(spHeatResult.targetDaily).length>0;
     const gotSpHeatActual = Object.keys(spHeatResult.actualRows).length>0;
-    const allErrors = errors.concat(targetResult.errors, prodResult.errors, stopResult.errors, powerResult.errors, targetProdResult.errors, clinkerResult.errors, cppResult.errors, spHeatResult.errors);
+    const allErrors = errors.concat(targetResult.errors, prodResult.errors, stopResult.errors, powerResult.errors, targetProdResult.errors, clinkerResult.errors, cppResult.errors, spHeatResult.errors, specificPowerResult.errors);
     const stamp = new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
     if(gotAny || targetResult.updated>0 || gotProd || gotStop || gotPower || gotTargetProd || gotAdditive || gotClinkerActual || gotCppActual || gotCppTarget || gotSpHeatTarget || gotSpHeatActual){
       if(gotAny) REAL_QUALITY = data;
@@ -4707,7 +4812,7 @@ async function doLiveQualityRefresh(){
       renderCompressiveStrengthTabs();
       if(gotProd || gotStop || gotTargetProd){ renderProductionTable(); renderMtbfChart(); renderDowntimeChart(); }
       if(gotPower) renderPowerChart();
-      if(gotAdditive || gotClinkerActual || gotProd || gotTargetProd || gotSpHeatTarget || gotSpHeatActual) renderKPIs();
+      if(gotAdditive || gotClinkerActual || gotProd || gotPower || gotTargetProd || gotSpHeatTarget || gotSpHeatActual || Object.keys(specificPowerResult.data).length) renderKPIs();
       if(gotCppActual || gotCppTarget || (targetResult && targetResult.updated>0)) renderCppKpis();
     } else if(status){
       const shown = allErrors.slice(0,8).join('; ') + (allErrors.length>8 ? ` &hellip; (+${allErrors.length-8} more)` : '');
