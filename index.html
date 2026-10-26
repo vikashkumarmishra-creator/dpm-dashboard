@@ -1984,24 +1984,24 @@ async function fetchClinkerAdditives(){
 function clinkerAdditiveSummary(section,dateFrom,dateTo){
   const days=isoRangeDays(dateFrom,dateTo),daily=REAL_CF_ADDITIVES[section]||{};
   function total(f,keys){
-    let sum=0,n=0;
-    days.forEach(d=>{const rec=daily[d]||{},fields=keys.map(k=>rec[k]);if(fields.every(v=>v && v.n===rec._rows)){sum+=fields.reduce((s,v)=>s+v.sum,0);n++;}});
-    return {...f,value:n?sum:null,n,total:days.length};
+    let sum=0,n=0,cement=0,paired=0;
+    days.forEach(d=>{const rec=daily[d]||{},fields=keys.map(k=>rec[k]);if(fields.every(v=>v && v.n===rec._rows)){sum+=fields.reduce((s,v)=>s+v.sum,0);n++;const cem=(REAL_CLINKER_CEMENT[section]||{})[d];if(typeof cem==='number' && Number.isFinite(cem)){cement+=cem;paired++;}}});
+    return {...f,value:n?sum:null,percent:n && paired===n && cement>0?sum/cement*100:null,n,total:days.length};
   }
   const materials=CF_MATERIALS.map(m=>total({...m,column:m.flyColumn+' + '+m.gypsumColumn},['CF Fly '+m.id,'CF Gypsum '+m.id]));
   const aggregates=CF_ADDITIVE_COLUMNS.map(f=>total(f,[f.key]));
-  let adjustment=0,adjustmentDays=0;
+  let adjustment=0,adjustmentDays=0,adjustmentCement=0,adjustmentPaired=0;
   days.forEach(d=>{
     const rec=daily[d]||{},mix=rec['CF Total Additive Dry Qty'];
     const fields=CF_MATERIALS.flatMap(m=>[rec['CF Fly '+m.id],rec['CF Gypsum '+m.id]]);
-    if(mix && mix.n===rec._rows && fields.every(v=>v && v.n===rec._rows)){adjustment+=mix.sum-fields.reduce((s,v)=>s+v.sum,0);adjustmentDays++;}
+    if(mix && mix.n===rec._rows && fields.every(v=>v && v.n===rec._rows)){adjustment+=mix.sum-fields.reduce((s,v)=>s+v.sum,0);adjustmentDays++;const cem=(REAL_CLINKER_CEMENT[section]||{})[d];if(typeof cem==='number' && Number.isFinite(cem)){adjustmentCement+=cem;adjustmentPaired++;}}
   });
-  return {materials,aggregates,adjustment:adjustmentDays && Math.abs(adjustment)>1e-6?{label:'Blend clinker adjustment',value:adjustment,n:adjustmentDays,total:days.length,column:'CH = FN − CN'}:null};
+  return {materials,aggregates,adjustment:adjustmentDays && Math.abs(adjustment)>1e-6?{label:'Blend clinker adjustment',value:adjustment,percent:adjustmentPaired===adjustmentDays && adjustmentCement>0?adjustment/adjustmentCement*100:null,n:adjustmentDays,total:days.length,column:'CH = FN − CN'}:null};
 }
 function clinkerAdditiveTooltipRows(summary){
   if(!summary)return '';
   const rows=[...summary.materials,...(summary.adjustment?[summary.adjustment]:[]),summary.aggregates[2]];
-  return '<tr><td colspan="3" class="cf-material-heading">Individual additives — both blend streams (dry MT)</td></tr>'+rows.map(r=>`<tr><td class="rowhead">${r.label}</td><td>&mdash;</td><td>${r.value==null?'&mdash;':fmt(r.value,2)} <small>(${r.n}/${r.total}d)</small></td></tr>`).join('');
+  return '<tr><td colspan="4" class="cf-material-heading">Individual additives — both blend streams (dry MT)</td></tr>'+rows.map(r=>`<tr><td class="rowhead">${r.label}</td><td>&mdash;</td><td>${r.value==null?'&mdash;':fmt(r.value,2)} <small>(${r.n}/${r.total}d)</small></td><td>${r.percent==null?'&mdash;':fmt(r.percent,2)+'%'}</td></tr>`).join('');
 }
 function positionCfAdditiveTooltip(card,panel){
   panel.style.visibility='hidden';panel.style.display='block';
@@ -2255,17 +2255,17 @@ function buildKpiClinkerFactorHoverTable(h){
   return `<div class="kpi-hover-panel cf-additive-panel">
     <div class="kpi-hover-title">${kpiBadgeHtml(h.badge)} ${h.title}</div>
     <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:380px;">
-      <thead><tr><th></th><th>Target</th><th>Actual</th></tr></thead>
+      <thead><tr><th></th><th>Target</th><th>Actual</th><th>Actual %</th></tr></thead>
       <tbody>
-        <tr><td class="rowhead">Avg. Total Additive % (window)</td><td>${fmt(h.avgAdditive,1)}%</td><td>&mdash;</td></tr>
-        <tr><td class="rowhead">Clinker Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualClinker,0)}</td></tr>
+        <tr><td class="rowhead">Avg. Total Additive % (window)</td><td>${fmt(h.avgAdditive,1)}%</td><td>&mdash;</td><td>&mdash;</td></tr>
+        <tr><td class="rowhead">Clinker Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualClinker,0)}</td><td>${h.actualResult==null?'&mdash;':fmt(h.actualResult,2)+'%'}</td></tr>
         ${clinkerAdditiveTooltipRows(h.additiveDetails)}
-        <tr><td class="rowhead">Total Cement Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualCement,0)}</td></tr>
-        <tr><td class="rowhead">Days with real data</td><td>${h.targetCoveredDays} / ${h.targetTotalDays}d</td><td>${h.actualCoveredDays} / ${h.actualTotalDays}d</td></tr>
+        <tr><td class="rowhead">Total Cement Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualCement,0)}</td><td>${h.actualCement>0?'100%':'&mdash;'}</td></tr>
+        <tr><td class="rowhead">Days with real data</td><td>${h.targetCoveredDays} / ${h.targetTotalDays}d</td><td>${h.actualCoveredDays} / ${h.actualTotalDays}d</td><td>&mdash;</td></tr>
       </tbody>
-      <tfoot><tr style="font-weight:700;"><td class="rowhead">= Clinker Factor</td><td>${fmt(h.targetResult,1)}%</td><td>${fmt(h.actualResult,1)}%</td></tr></tfoot>
+      <tfoot><tr style="font-weight:700;"><td class="rowhead">= Clinker Factor</td><td>${fmt(h.targetResult,1)}%</td><td>${fmt(h.actualResult,1)}%</td><td>&mdash;</td></tr></tfoot>
     </table></div>
-    <div class="kpi-hover-note" style="margin-top:6px;">Materials = DS–DY + FF–FL, separately by cement type. CH = FN − CN; CI = DZ. Black Shale is named Black Fly Ash in the sheet. Any blend clinker adjustment reconciles material sums to CH + CI; Total Additive is a subtotal, not another material.</div>
+    <div class="kpi-hover-note" style="margin-top:6px;">Actual % = dry quantity ÷ total cement dry quantity × 100, using the same covered dates. Percentages use unrounded period totals; zero cement gives &mdash;. Materials = DS–DY + FF–FL, separately by cement type. CH = FN − CN; CI = DZ. Black Shale is named Black Fly Ash in the sheet. Any blend clinker adjustment reconciles material sums to CH + CI; Total Additive is a subtotal, not another material.</div>
     ${h.actualCoveredDays===0 ? `<div class="kpi-hover-note" style="margin-top:8px;">No day in this window falls inside your PMS Cement Mill shift log's real-data coverage (${h.actualBoundsText||'no data read yet'}) &mdash; that's why Actual shows &mdash; here, not a calculation error. Pick a date range inside that coverage window, or upload a fresher shift-log export to extend it.</div>` : ''}
   </div>`;
 }
