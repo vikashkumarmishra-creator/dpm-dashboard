@@ -539,6 +539,10 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 #powerBalanceTable .power-balance-value { font-weight:800; color:var(--text); }
 #powerBalanceTable .power-balance-remark { white-space:normal; max-width:560px; text-align:left; font-size:11px; }
 .power-balance-footnote { margin:10px 0 0; color:var(--text-muted); font-size:11px; }
+.cf-additive-panel { max-height:70vh; overflow-y:auto; }
+.cf-additive-panel::before { display:none; }
+.cf-material-heading { text-align:left; color:var(--accent); font-weight:700; }
+.cf-additive-panel .kpi-hover-table td { padding:5px 7px; }
 </style>
 </head>
 <body>
@@ -1943,6 +1947,70 @@ function bindPowerBalanceCard(){
   if(disclosure)disclosure.addEventListener('toggle',()=>{powerBalanceOpen=disclosure.open;});
 }
 
+const CF_MATERIALS = [{"id": "ntpc", "label": "NTPC Fly Ash", "header": "NTPC Fly Ash Dry Qty", "flyColumn": "DS", "gypsumColumn": "FF"}, {"id": "local", "label": "Local Fly Ash", "header": "Local Fly Ash Dry Qty", "flyColumn": "DT", "gypsumColumn": "FG"}, {"id": "cpp", "label": "CPP Fly Ash", "header": "CPP Fly Ash Dry Qty", "flyColumn": "DU", "gypsumColumn": "FH"}, {"id": "bed", "label": "CPP Bed Ash", "header": "CPP Bed Ash Dry Qty", "flyColumn": "DV", "gypsumColumn": "FI"}, {"id": "black", "label": "Black Shale / Black Fly Ash", "header": "Black Fly Ash Dry Qty", "flyColumn": "DW", "gypsumColumn": "FJ"}, {"id": "ls", "label": "Crushed Limestone", "header": "Crushed LS Dry Qty", "flyColumn": "DX", "gypsumColumn": "FK"}, {"id": "gypsum", "label": "Gypsum", "header": "Gypsum Dry Qty", "flyColumn": "DY", "gypsumColumn": "FL"}];
+let REAL_CF_ADDITIVES = {'Cement Mill PPC':{},'Cement Mill OPC':{}};
+const CF_ADDITIVE_COLUMNS = [
+  {key:'CF Gypsum Dry Qty',label:'Gypsum Dry Qty',column:'CH'},
+  {key:'CF Fly Ash Dry Qty',label:'Fly Ash Dry Qty',column:'CI'},
+  {key:'CF Total Additive Dry Qty',label:'Total Additive Dry Qty',column:'CJ'}
+];
+function readClinkerAdditives(rows){
+  const data={'Cement Mill PPC':{},'Cement Mill OPC':{}};
+  const dCol=findColLive(rows,'Actual Date'),tCol=findColLive(rows,'Type of Cement');
+  if(!dCol || !tCol)return {data,error:'Clinker additive Date or Type of Cement column missing.'};
+  const fields=[...CF_ADDITIVE_COLUMNS,...CF_MATERIALS.flatMap(m=>['Fly','Gypsum'].map(stream=>({key:'CF '+stream+' '+m.id})))];
+  const columns=fields.map(f=>findColLive(rows,f.key));
+  rows.forEach(r=>{
+    const type=String(r[tCol]||'').trim().toUpperCase();if(type!=='PPC' && type!=='OPC')return;
+    const d=parseGvizDate(r[dCol]) || (typeof r[dCol]==='string'?new Date(r[dCol]):null);
+    if(!d || isNaN(d))return;
+    const daily=data['Cement Mill '+type],iso=toISO(d);
+    const day=daily[iso]||(daily[iso]={});
+    day._rows=(day._rows||0)+1;
+    fields.forEach((f,i)=>{
+      if(!columns[i])return;
+      const value=numOrNull(r[columns[i]]);if(value==null || !Number.isFinite(value))return;
+      const field=day[f.key]||(day[f.key]={sum:0,n:0});field.sum+=value;field.n++;
+    });
+  });
+  return {data,error:columns.some(c=>!c)?'Clinker additive CH–CJ columns missing from API.':null};
+}
+async function fetchClinkerAdditives(){
+  const url=new URL(document.getElementById('appsScriptUrlInput').value.trim());url.searchParams.set('clinkeradditives','1');
+  const res=await fetch(url.toString(),{cache:'no-store'});if(!res.ok)throw new Error('Clinker additives HTTP '+res.status);
+  const payload=await res.json();if(!Array.isArray(payload.clinkerAdditiveRows))throw new Error('Clinker additive live API fields missing.');
+  const result=readClinkerAdditives(payload.clinkerAdditiveRows);if(result.error)throw new Error(result.error);return result.data;
+}
+function clinkerAdditiveSummary(section,dateFrom,dateTo){
+  const days=isoRangeDays(dateFrom,dateTo),daily=REAL_CF_ADDITIVES[section]||{};
+  function total(f,keys){
+    let sum=0,n=0;
+    days.forEach(d=>{const rec=daily[d]||{},fields=keys.map(k=>rec[k]);if(fields.every(v=>v && v.n===rec._rows)){sum+=fields.reduce((s,v)=>s+v.sum,0);n++;}});
+    return {...f,value:n?sum:null,n,total:days.length};
+  }
+  const materials=CF_MATERIALS.map(m=>total({...m,column:m.flyColumn+' + '+m.gypsumColumn},['CF Fly '+m.id,'CF Gypsum '+m.id]));
+  const aggregates=CF_ADDITIVE_COLUMNS.map(f=>total(f,[f.key]));
+  let adjustment=0,adjustmentDays=0;
+  days.forEach(d=>{
+    const rec=daily[d]||{},mix=rec['CF Total Additive Dry Qty'];
+    const fields=CF_MATERIALS.flatMap(m=>[rec['CF Fly '+m.id],rec['CF Gypsum '+m.id]]);
+    if(mix && mix.n===rec._rows && fields.every(v=>v && v.n===rec._rows)){adjustment+=mix.sum-fields.reduce((s,v)=>s+v.sum,0);adjustmentDays++;}
+  });
+  return {materials,aggregates,adjustment:adjustmentDays && Math.abs(adjustment)>1e-6?{label:'Blend clinker adjustment',value:adjustment,n:adjustmentDays,total:days.length,column:'CH = FN − CN'}:null};
+}
+function clinkerAdditiveTooltipRows(summary){
+  if(!summary)return '';
+  const rows=[...summary.materials,...(summary.adjustment?[summary.adjustment]:[]),summary.aggregates[2]];
+  return '<tr><td colspan="3" class="cf-material-heading">Individual additives — both blend streams (dry MT)</td></tr>'+rows.map(r=>`<tr><td class="rowhead">${r.label}</td><td>&mdash;</td><td>${r.value==null?'&mdash;':fmt(r.value,2)} <small>(${r.n}/${r.total}d)</small></td></tr>`).join('');
+}
+function positionCfAdditiveTooltip(card,panel){
+  panel.style.visibility='hidden';panel.style.display='block';
+  const rect=card.getBoundingClientRect(),height=panel.getBoundingClientRect().height;
+  const top=Math.max(130,Math.min(rect.bottom+10,window.innerHeight-height-12));
+  panel.style.top=(top-rect.top)+'px';
+  panel.style.display='';panel.style.visibility='';
+}
+
 function renderKPIs(){
   const grid = document.getElementById('kpiGrid');
 
@@ -2067,7 +2135,7 @@ function renderKPIs(){
       delta: (ppcClinkerActual.actual!=null && targetClinkerFactorPPC!=null) ? (ppcClinkerActual.actual-targetClinkerFactorPPC) : null,
       sub: 'Target '+fmt(targetClinkerFactorPPC,1)+'%'
         + (ppcClinkerActual.actual==null ? ' &middot; no Actual data in this window (PMS covers through '+boundsRangeText(REAL_CLINKER_BOUNDS,'Cement Mill PPC').split(' to ')[1]+')' : ''),
-      hover: { kind:'clinkerfactor', title:'Clinker Factor (PPC): Target = 100 &minus; average(Total Additive %) &mdash; Production Target sheet, column BN. Actual = &Sigma;(Clinker Dry Qty) &divide; &Sigma;(Total Cement Dry Qty) &times; 100 &mdash; PMS Cement Mill shift log, column CG',
+      hover: { kind:'clinkerfactor', additiveDetails:clinkerAdditiveSummary('Cement Mill PPC',state.dateFrom,state.dateTo), title:'Clinker Factor (PPC): Target = 100 &minus; average(Total Additive %) &mdash; Production Target sheet, column BN. Actual = &Sigma;(Clinker Dry Qty) &divide; &Sigma;(Total Cement Dry Qty) &times; 100 &mdash; PMS Cement Mill shift log, column CG',
         badge: combineBadge2(coverageBadge(ppcAdditive), coverageBadge(ppcClinkerActual)),
         avgAdditive: ppcAdditive.avg, targetCoveredDays: ppcAdditive.covered, targetTotalDays: ppcAdditive.total, targetResult: targetClinkerFactorPPC,
         actualClinker: ppcClinkerActual.clinker, actualCement: ppcClinkerActual.cement, actualCoveredDays: ppcClinkerActual.covered, actualTotalDays: ppcClinkerActual.total, actualResult: ppcClinkerActual.actual,
@@ -2076,7 +2144,7 @@ function renderKPIs(){
       delta: (opcClinkerActual.actual!=null && targetClinkerFactorOPC!=null) ? (opcClinkerActual.actual-targetClinkerFactorOPC) : null,
       sub: 'Target '+fmt(targetClinkerFactorOPC,1)+'%'
         + (opcClinkerActual.actual==null ? ' &middot; no Actual data in this window (PMS covers through '+boundsRangeText(REAL_CLINKER_BOUNDS,'Cement Mill OPC').split(' to ')[1]+')' : ''),
-      hover: { kind:'clinkerfactor', title:'Clinker Factor (OPC): Target = 100 &minus; average(Total Additive %) &mdash; Production Target sheet, column BV. Actual = &Sigma;(Clinker Dry Qty) &divide; &Sigma;(Total Cement Dry Qty) &times; 100 &mdash; PMS Cement Mill shift log, column CG',
+      hover: { kind:'clinkerfactor', additiveDetails:clinkerAdditiveSummary('Cement Mill OPC',state.dateFrom,state.dateTo), title:'Clinker Factor (OPC): Target = 100 &minus; average(Total Additive %) &mdash; Production Target sheet, column BV. Actual = &Sigma;(Clinker Dry Qty) &divide; &Sigma;(Total Cement Dry Qty) &times; 100 &mdash; PMS Cement Mill shift log, column CG',
         badge: combineBadge2(coverageBadge(opcAdditive), coverageBadge(opcClinkerActual)),
         actualBoundsText: boundsRangeText(REAL_CLINKER_BOUNDS,'Cement Mill OPC'),
         avgAdditive: opcAdditive.avg, targetCoveredDays: opcAdditive.covered, targetTotalDays: opcAdditive.total, targetResult: targetClinkerFactorOPC,
@@ -2129,6 +2197,7 @@ function positionKpiHoverPanels(){
     const panelWidth = panel.getBoundingClientRect().width;
     panel.style.display = ''; panel.style.visibility = '';
     if(cardRect.left + panelWidth > window.innerWidth - 12) panel.classList.add('anchor-right');
+    if(panel.classList.contains('cf-additive-panel')) card.onmouseenter=()=>positionCfAdditiveTooltip(card,panel);
   });
 }
 function kpiBadgeHtml(badge){
@@ -2183,18 +2252,20 @@ function buildKpiNoteHoverPanel(h){
 // no live/metered additive-dosing data uploaded yet, so this stays a Target-only card rather than
 // showing a fabricated Actual.
 function buildKpiClinkerFactorHoverTable(h){
-  return `<div class="kpi-hover-panel">
+  return `<div class="kpi-hover-panel cf-additive-panel">
     <div class="kpi-hover-title">${kpiBadgeHtml(h.badge)} ${h.title}</div>
     <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:380px;">
       <thead><tr><th></th><th>Target</th><th>Actual</th></tr></thead>
       <tbody>
         <tr><td class="rowhead">Avg. Total Additive % (window)</td><td>${fmt(h.avgAdditive,1)}%</td><td>&mdash;</td></tr>
         <tr><td class="rowhead">Clinker Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualClinker,0)}</td></tr>
+        ${clinkerAdditiveTooltipRows(h.additiveDetails)}
         <tr><td class="rowhead">Total Cement Dry Qty (&Sigma;, window)</td><td>&mdash;</td><td>${fmt(h.actualCement,0)}</td></tr>
         <tr><td class="rowhead">Days with real data</td><td>${h.targetCoveredDays} / ${h.targetTotalDays}d</td><td>${h.actualCoveredDays} / ${h.actualTotalDays}d</td></tr>
       </tbody>
       <tfoot><tr style="font-weight:700;"><td class="rowhead">= Clinker Factor</td><td>${fmt(h.targetResult,1)}%</td><td>${fmt(h.actualResult,1)}%</td></tr></tfoot>
     </table></div>
+    <div class="kpi-hover-note" style="margin-top:6px;">Materials = DS–DY + FF–FL, separately by cement type. CH = FN − CN; CI = DZ. Black Shale is named Black Fly Ash in the sheet. Any blend clinker adjustment reconciles material sums to CH + CI; Total Additive is a subtotal, not another material.</div>
     ${h.actualCoveredDays===0 ? `<div class="kpi-hover-note" style="margin-top:8px;">No day in this window falls inside your PMS Cement Mill shift log's real-data coverage (${h.actualBoundsText||'no data read yet'}) &mdash; that's why Actual shows &mdash; here, not a calculation error. Pick a date range inside that coverage window, or upload a fresher shift-log export to extend it.</div>` : ''}
   </div>`;
 }
@@ -5004,10 +5075,11 @@ async function doLiveQualityRefresh(){
     // Fetch your Apps Script payload and the published Plant Stoppage CSV concurrently -- the CSV
     // fetch is a plain static-file request so it typically finishes long before the Apps Script
     // call does; running them together means the CSV never adds to the wait.
-    const [payload, csvRowsResult, gridExportResult] = await Promise.all([
+    const [payload, csvRowsResult, gridExportResult, cfAdditiveResult] = await Promise.all([
       fetchLiveApiPayload(true),
       fetchPublishedStoppageCsv().then(rows => ({rows, error: null})).catch(e => ({rows: null, error: e.message})),
       fetchTopGridExport().then(daily=>({daily,error:null})).catch(e=>({daily:{},error:e.message})),
+      fetchClinkerAdditives().then(data=>({data,error:null})).catch(e=>({data:null,error:e.message})),
     ]);
     if(refreshTicker){ clearInterval(refreshTicker); refreshTicker = null; }
     const {data, errors} = refreshLiveQuality(payload);
@@ -5028,6 +5100,8 @@ async function doLiveQualityRefresh(){
     const powerResult = refreshLivePower(payload);
     const targetProdResult = refreshLiveTargetProduction(payload);
     const clinkerResult = refreshLiveClinkerFactor(payload);
+    const cachedAdditives=readClinkerAdditives((payload.worksheets||{})['PMS Cement Mill (VRPM+Ball Mill)']||[]);
+    REAL_CF_ADDITIVES=cfAdditiveResult.error?cachedAdditives.data:cfAdditiveResult.data;
     const cppResult = refreshLiveCpp(payload);
     const spHeatResult = refreshLiveKilnSpecificHeat(payload);
     const specificPowerResult = refreshLiveSpecificPowerInputs(payload);
@@ -5045,6 +5119,7 @@ async function doLiveQualityRefresh(){
     const gotSpHeatActual = Object.keys(spHeatResult.actualRows).length>0;
     const allErrors = errors.concat(targetResult.errors, prodResult.errors, stopResult.errors, powerResult.errors, targetProdResult.errors, clinkerResult.errors, cppResult.errors, spHeatResult.errors, specificPowerResult.errors);
     if(gridExportResult.error) allErrors.push('Grid Export: '+gridExportResult.error);
+    if(cfAdditiveResult.error) allErrors.push('Clinker additives: '+cfAdditiveResult.error);
     const stamp = new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
     if(gotAny || targetResult.updated>0 || gotProd || gotStop || gotPower || gotTargetProd || gotAdditive || gotClinkerActual || gotCppActual || gotCppTarget || gotSpHeatTarget || gotSpHeatActual){
       if(gotAny) REAL_QUALITY = data;
