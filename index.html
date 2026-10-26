@@ -523,6 +523,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 .quality-section-summary { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding:12px 16px; margin:8px 0 10px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); color:var(--text-secondary); font-size:13px; }
 .quality-section-summary strong { color:var(--text-primary); font-size:15px; }
 [data-theme="glass"] .quality-section-summary { background:rgba(13,34,50,0.85); border-color:rgba(39,232,255,0.4); }
+.top-power-start { grid-column:1; }
 </style>
 </head>
 <body>
@@ -1848,6 +1849,67 @@ function sectionQualitySummaryHtml(model){
     <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed.</p>`;
 }
 
+let TOP_GRID_EXPORT_DAILY = {};
+function readTopGridExport(rows){
+  const daily={};
+  const dateCol=findColLive(rows,'Date :-'),valueCol=findColLive(rows,'TOTAL EXPORT TO GRID(KWh)');
+  if(!dateCol || !valueCol)return {daily,error:'Grid Export: Date or TOTAL EXPORT TO GRID(KWh) column missing.'};
+  rows.forEach(r=>{
+    const d=parseGvizDate(r[dateCol]) || (typeof r[dateCol]==='string'?new Date(r[dateCol]):null);
+    const v=numOrNull(r[valueCol]);
+    if(d && !isNaN(d) && v!=null && Number.isFinite(v))daily[toISO(d)]=v;
+  });
+  return {daily,error:null};
+}
+async function fetchTopGridExport(){
+  const input=document.getElementById('appsScriptUrlInput');
+  const url=new URL(input.value.trim());url.searchParams.set('powerbalance','1');
+  const res=await fetch(url.toString(),{cache:'no-store'});
+  if(!res.ok)throw new Error('Grid Export HTTP '+res.status);
+  const payload=await res.json();
+  if(!Array.isArray(payload.gridExportRows))throw new Error('Grid Export live API field is missing.');
+  const parsed=readTopGridExport(payload.gridExportRows);
+  if(parsed.error)throw new Error(parsed.error);
+  return parsed.daily;
+}
+function computeTopPowerCards(dateFrom,dateTo){
+  const days=isoRangeDays(dateFrom,dateTo);
+  const generation=REAL_CPP['Power Generation (MW)']||{};
+  const auxiliary=REAL_CPP['Plant Auxiliary Power Consumption (MW)']||{};
+  const consumption=REAL_CPP['Export to Cement (MW)']||{};
+  const auxPct=REAL_CPP['Auxiliary Con (%)']||{},plf=REAL_CPP['PLF (%)']||{};
+  const valid=v=>typeof v==='number' && Number.isFinite(v);
+  // CPP's daily energy columns are MWh readings despite the legacy '(MW)' headers.
+  // Convert to kWh so every subtraction uses the same unit as the grid meter.
+  const energy=(records)=>Object.fromEntries(Object.entries(records).filter(([,v])=>valid(v)).map(([d,v])=>[d,v*1000]));
+  const g=energy(generation),a=energy(auxiliary),c=energy(consumption),e=TOP_GRID_EXPORT_DAILY;
+  function sumOnInputs(inputs,calculate,average=false){
+    let sum=0,n=0;
+    days.forEach(d=>{if(inputs.every(x=>valid(x[d]))){sum+=calculate(...inputs.map(x=>x[d]));n++;}});
+    let value=n?(average?sum/n:sum):null;
+    if(value!=null && Math.abs(value)<1e-7)value=0;
+    return {value,n,total:days.length};
+  }
+  const loss=sumOnInputs([g,a,c,e],(g,a,c,e)=>(g-a)-(c+e));
+  const lossBalance=sumOnInputs([g,a,c,e],(g,a)=>g-a);
+  const lossPercent=loss.value!=null && lossBalance.value!==0 ? loss.value/lossBalance.value*100 : null;
+  return [
+    {label:'Total Power Generation',unit:'kWh',...sumOnInputs([g],x=>x),formula:'Total Power Generation (CPP)',detail:'CPP Power Generation × 1,000'},
+    {label:'Auxiliary Consumption',unit:'kWh',...sumOnInputs([a],x=>x),formula:'Auxiliary Consumption (CPP)',detail:'CPP Auxiliary Consumption × 1,000'},
+    {label:'Balance',unit:'kWh',...sumOnInputs([g,a],(g,a)=>g-a),formula:'Generation − Auxiliary Consumption',detail:'Calculated on matching source dates'},
+    {label:'Consumption',unit:'kWh',...sumOnInputs([c],x=>x),formula:'Export to Cement Plant (CPP)',detail:'CPP Export to Cement × 1,000'},
+    {label:'Export',unit:'kWh',...sumOnInputs([e],x=>x),formula:'Total Export to Grid',detail:'DMS Electrical: TOTAL EXPORT TO GRID(KWh)'},
+    {label:'Transformer Loss',unit:'kWh',...loss,formula:'Balance − (Consumption + Export)',detail:'Calculated on matching source dates; negative values retained'},
+    {label:'Transformer Loss %',unit:'%',value:lossPercent,n:loss.n,total:loss.total,formula:'Transformer Loss ÷ Balance × 100',detail:'Ratio of totals on matching source dates; zero balance gives N/A'},
+    {label:'% Auxiliary Consumption',unit:'%',...sumOnInputs([auxPct],x=>x,true),formula:'Auxiliary Consumption % (CPP)',detail:'Average of recorded daily percentages'},
+    {label:'PLF %',unit:'%',...sumOnInputs([plf],x=>x,true),formula:'PLF (CPP)',detail:'Average of recorded daily percentages'}
+  ];
+}
+function topPowerCardDescriptors(dateFrom,dateTo){
+  return computeTopPowerCards(dateFrom,dateTo).map((r,i)=>({label:r.label,value:r.value==null?'N/A':fmt(r.value,2),unit:r.unit,delta:null,
+    sub:r.formula+'<br>'+r.detail+'<br>'+(r.n?'<span class="chip live">LIVE'+(r.n<r.total?' (partial)':'')+'</span> '+r.n+'/'+r.total+' days':'Source data unavailable'),topPowerStart:i===0}));
+}
+
 function renderKPIs(){
   const grid = document.getElementById('kpiGrid');
 
@@ -1997,6 +2059,7 @@ function renderKPIs(){
         targetHasSource: true, targetN: kilnSpHeatTarget.n, targetTotal: kilnSpHeatTarget.total,
         actualN: kilnSpHeatActual.n, actualTotal: kilnSpHeatActual.total } },
   ];
+  cards.push(...topPowerCardDescriptors(state.dateFrom,state.dateTo));
   grid.innerHTML = cards.map(c=>{
     const hasDelta = c.delta!=null;
     const up = c.delta>=0;
@@ -2008,7 +2071,7 @@ function renderKPIs(){
     const isGood = goodIsUp ? up : !up;
     const dirClass = isGood ? 'up' : 'down';
     const deltaHtml = hasDelta ? `<div class="kpi-delta ${dirClass}">${arrow} ${fmt(Math.abs(c.delta),1)}${c.unit==='%'?' pts':'%'} vs target</div>` : '';
-    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
+    return `<div class="kpi-card${c.topPowerStart?' top-power-start':''}${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}<span class="kpi-unit">${c.unit}</span></div>
       ${deltaHtml}
@@ -4908,9 +4971,10 @@ async function doLiveQualityRefresh(){
     // Fetch your Apps Script payload and the published Plant Stoppage CSV concurrently -- the CSV
     // fetch is a plain static-file request so it typically finishes long before the Apps Script
     // call does; running them together means the CSV never adds to the wait.
-    const [payload, csvRowsResult] = await Promise.all([
+    const [payload, csvRowsResult, gridExportResult] = await Promise.all([
       fetchLiveApiPayload(true),
       fetchPublishedStoppageCsv().then(rows => ({rows, error: null})).catch(e => ({rows: null, error: e.message})),
+      fetchTopGridExport().then(daily=>({daily,error:null})).catch(e=>({daily:{},error:e.message})),
     ]);
     if(refreshTicker){ clearInterval(refreshTicker); refreshTicker = null; }
     const {data, errors} = refreshLiveQuality(payload);
@@ -4925,6 +4989,9 @@ async function doLiveQualityRefresh(){
       stopResult = stopResultAppsScript;
       stopResult.errors = (stopResult.errors||[]).concat('Published Plant Stoppage CSV: '+csvRowsResult.error+' -- falling back to Apps Script stoppage data only.');
     }
+    const cachedGridRows = payload.worksheets && payload.worksheets['Transpose Main Cement Plant Electrical for Process'];
+    const cachedGrid = cachedGridRows ? readTopGridExport(cachedGridRows) : {daily:{}};
+    TOP_GRID_EXPORT_DAILY = gridExportResult.error ? cachedGrid.daily : gridExportResult.daily;
     const powerResult = refreshLivePower(payload);
     const targetProdResult = refreshLiveTargetProduction(payload);
     const clinkerResult = refreshLiveClinkerFactor(payload);
@@ -4944,6 +5011,7 @@ async function doLiveQualityRefresh(){
     const gotSpHeatTarget = Object.keys(spHeatResult.targetDaily).length>0;
     const gotSpHeatActual = Object.keys(spHeatResult.actualRows).length>0;
     const allErrors = errors.concat(targetResult.errors, prodResult.errors, stopResult.errors, powerResult.errors, targetProdResult.errors, clinkerResult.errors, cppResult.errors, spHeatResult.errors, specificPowerResult.errors);
+    if(gridExportResult.error) allErrors.push('Grid Export: '+gridExportResult.error);
     const stamp = new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
     if(gotAny || targetResult.updated>0 || gotProd || gotStop || gotPower || gotTargetProd || gotAdditive || gotClinkerActual || gotCppActual || gotCppTarget || gotSpHeatTarget || gotSpHeatActual){
       if(gotAny) REAL_QUALITY = data;
