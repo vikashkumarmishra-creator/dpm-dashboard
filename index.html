@@ -524,21 +524,21 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 .quality-section-summary strong { color:var(--text-primary); font-size:15px; }
 [data-theme="glass"] .quality-section-summary { background:rgba(13,34,50,0.85); border-color:rgba(39,232,255,0.4); }
 
-.power-balance-card { grid-column:1 / -1; }
-.power-balance-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
-.power-balance-head h2 { margin:0; font-size:16px; color:var(--text); }
-.power-balance-head > span { font-size:11px; color:var(--text-muted); }
-.power-balance-values { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 24px; margin:0; }
-.power-balance-metric { padding:12px 0; border-bottom:1px solid var(--border); }
-.power-balance-metric dt { color:var(--text-muted); font-size:11px; font-weight:700; }
-.power-balance-metric dd { margin:4px 0; font-size:24px; line-height:1.2; font-weight:800; }
-.power-balance-metric small { font-size:10px; color:var(--text-muted); }
-.power-balance-details { margin-top:12px; font-size:11px; color:var(--text-muted); }
-.power-balance-details summary { cursor:pointer; }
-.power-balance-details li { margin:6px 0; }
-@media (max-width:700px) { .power-balance-values { grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 12px; } .power-balance-head { align-items:flex-start; flex-direction:column; } }
-@media (max-width:420px) { .power-balance-values { grid-template-columns:1fr; } }
 
+.power-balance-card { grid-column:1 / -1; }
+.power-balance-head { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:pointer; padding:4px 0; }
+.power-balance-title { font-size:16px; font-weight:800; }
+.power-balance-title::before { content:'▸'; display:inline-block; width:18px; color:var(--accent); }
+#powerBalanceDisclosure[open] .power-balance-title::before { content:'▾'; }
+.power-balance-head > span:last-child { font-size:11px; color:var(--text-muted); text-align:right; }
+.power-balance-toggle-hint { color:var(--accent); }
+.power-balance-head:focus-visible { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
+#powerBalanceTable { margin-top:12px; min-width:800px; }
+#powerBalanceTable th { text-align:left; }
+#powerBalanceTable tbody th { font-size:12px; text-transform:none; font-weight:600; }
+#powerBalanceTable .power-balance-value { font-weight:800; color:var(--text); }
+#powerBalanceTable .power-balance-remark { white-space:normal; max-width:560px; text-align:left; font-size:11px; }
+.power-balance-footnote { margin:10px 0 0; color:var(--text-muted); font-size:11px; }
 </style>
 </head>
 <body>
@@ -1864,40 +1864,43 @@ function sectionQualitySummaryHtml(model){
     <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed.</p>`;
 }
 
-let TOP_GRID_EXPORT_DAILY = {};
+let TOP_GRID_POWER_DAILY = {import:{},export:{},consumption:{}};
+let powerBalanceOpen = false;
+const POWER_BALANCE_SOURCE = 'https://docs.google.com/spreadsheets/d/1yuChL3YrxWUMYu0UcWoyeq1oBITlbrKFfvAR7l5tYTE/edit?gid=1132400226#gid=1132400226';
 function readTopGridExport(rows){
-  const daily={};
-  const dateCol=findColLive(rows,'Date :-'),valueCol=findColLive(rows,'TOTAL EXPORT TO GRID(KWh)');
-  if(!dateCol || !valueCol)return {daily,error:'Grid Export: Date or TOTAL EXPORT TO GRID(KWh) column missing.'};
-  rows.forEach(r=>{
-    const d=parseGvizDate(r[dateCol]) || (typeof r[dateCol]==='string'?new Date(r[dateCol]):null);
-    const v=numOrNull(r[valueCol]);
-    if(d && !isNaN(d) && v!=null && Number.isFinite(v))daily[toISO(d)]=v;
+  const daily={import:{},export:{},consumption:{}};
+  const dateCol=findColLive(rows,'Date :-');
+  const columns={import:'TOTAL IMPORT FROM GRID(KWh)',export:'TOTAL EXPORT TO GRID(KWh)',consumption:'TOTAL IMPORT FROM (CPP+GRID) KWh'};
+  const missing=[];
+  Object.keys(columns).forEach(k=>{
+    const col=findColLive(rows,columns[k]);
+    if(!col || !dateCol){missing.push(columns[k]);return;}
+    rows.forEach(r=>{
+      const d=parseGvizDate(r[dateCol]) || (typeof r[dateCol]==='string'?new Date(r[dateCol]):null);
+      const v=numOrNull(r[col]);
+      if(d && !isNaN(d) && v!=null && Number.isFinite(v))daily[k][toISO(d)]=v;
+    });
   });
-  return {daily,error:null};
+  return {daily,error:missing.length?'Power Balance: missing '+missing.join(', '):null};
 }
 async function fetchTopGridExport(){
   const input=document.getElementById('appsScriptUrlInput');
   const url=new URL(input.value.trim());url.searchParams.set('powerbalance','1');
   const res=await fetch(url.toString(),{cache:'no-store'});
-  if(!res.ok)throw new Error('Grid Export HTTP '+res.status);
+  if(!res.ok)throw new Error('Power Balance HTTP '+res.status);
   const payload=await res.json();
-  if(!Array.isArray(payload.gridExportRows))throw new Error('Grid Export live API field is missing.');
+  if(!Array.isArray(payload.gridExportRows))throw new Error('Power Balance live API fields are missing.');
   const parsed=readTopGridExport(payload.gridExportRows);
   if(parsed.error)throw new Error(parsed.error);
   return parsed.daily;
 }
 function computeTopPowerCards(dateFrom,dateTo){
   const days=isoRangeDays(dateFrom,dateTo);
-  const generation=REAL_CPP['Power Generation (MW)']||{};
-  const auxiliary=REAL_CPP['Plant Auxiliary Power Consumption (MW)']||{};
-  const consumption=REAL_CPP['Export to Cement (MW)']||{};
+  const generation=REAL_CPP['Power Generation (MW)']||{},auxiliary=REAL_CPP['Plant Auxiliary Power Consumption (MW)']||{};
   const auxPct=REAL_CPP['Auxiliary Con (%)']||{},plf=REAL_CPP['PLF (%)']||{};
   const valid=v=>typeof v==='number' && Number.isFinite(v);
-  // CPP's daily energy columns are MWh readings despite the legacy '(MW)' headers.
-  // Convert to kWh so every subtraction uses the same unit as the grid meter.
-  const energy=(records)=>Object.fromEntries(Object.entries(records).filter(([,v])=>valid(v)).map(([d,v])=>[d,v*1000]));
-  const g=energy(generation),a=energy(auxiliary),c=energy(consumption),e=TOP_GRID_EXPORT_DAILY;
+  const energy=records=>Object.fromEntries(Object.entries(records).filter(([,v])=>valid(v)).map(([d,v])=>[d,v*1000]));
+  const g=energy(generation),a=energy(auxiliary),im=TOP_GRID_POWER_DAILY.import||{},ex=TOP_GRID_POWER_DAILY.export||{},c=TOP_GRID_POWER_DAILY.consumption||{};
   function sumOnInputs(inputs,calculate,average=false){
     let sum=0,n=0;
     days.forEach(d=>{if(inputs.every(x=>valid(x[d]))){sum+=calculate(...inputs.map(x=>x[d]));n++;}});
@@ -1905,28 +1908,39 @@ function computeTopPowerCards(dateFrom,dateTo){
     if(value!=null && Math.abs(value)<1e-7)value=0;
     return {value,n,total:days.length};
   }
-  const loss=sumOnInputs([g,a,c,e],(g,a,c,e)=>(g-a)-(c+e));
-  const lossBalance=sumOnInputs([g,a,c,e],(g,a)=>g-a);
-  const lossPercent=loss.value!=null && lossBalance.value!==0 ? loss.value/lossBalance.value*100 : null;
+  const matched=[g,a,im,ex,c];
+  const loss=sumOnInputs(matched,(g,a,im,ex,c)=>g-a+im-ex-c);
+  const totalOnLossDates=sumOnInputs(matched,(g,a,im)=>g-a+im);
+  const lossPct=loss.value!=null && totalOnLossDates.value!==0?loss.value/totalOnLossDates.value*100:null;
   return [
-    {label:'Total Power Generation',unit:'kWh',...sumOnInputs([g],x=>x),formula:'Total Power Generation (CPP)',detail:'CPP Power Generation × 1,000'},
-    {label:'Auxiliary Consumption',unit:'kWh',...sumOnInputs([a],x=>x),formula:'Auxiliary Consumption (CPP)',detail:'CPP Auxiliary Consumption × 1,000'},
-    {label:'Balance',unit:'kWh',...sumOnInputs([g,a],(g,a)=>g-a),formula:'Generation − Auxiliary Consumption',detail:'Calculated on matching source dates'},
-    {label:'Consumption',unit:'kWh',...sumOnInputs([c],x=>x),formula:'Export to Cement Plant (CPP)',detail:'CPP Export to Cement × 1,000'},
-    {label:'Export',unit:'kWh',...sumOnInputs([e],x=>x),formula:'Total Export to Grid',detail:'DMS Electrical: TOTAL EXPORT TO GRID(KWh)'},
-    {label:'Transformer Loss',unit:'kWh',...loss,formula:'Balance − (Consumption + Export)',detail:'Calculated on matching source dates; negative values retained'},
-    {label:'Transformer Loss %',unit:'%',value:lossPercent,n:loss.n,total:loss.total,formula:'Transformer Loss ÷ Balance × 100',detail:'Ratio of totals on matching source dates; zero balance gives N/A'},
-    {label:'% Auxiliary Consumption',unit:'%',...sumOnInputs([auxPct],x=>x,true),formula:'Auxiliary Consumption % (CPP)',detail:'Average of recorded daily percentages'},
-    {label:'PLF %',unit:'%',...sumOnInputs([plf],x=>x,true),formula:'PLF (CPP)',detail:'Average of recorded daily percentages'}
+    {label:'Total Power Generation',unit:'kWh',...sumOnInputs([g],x=>x),remark:'CPP Total Power Generation (converted to kWh)'},
+    {label:'Auxiliary Consumption',unit:'kWh',...sumOnInputs([a],x=>x),remark:'CPP Auxiliary Consumption (converted to kWh)'},
+    {label:'Balance',unit:'kWh',...sumOnInputs([g,a],(g,a)=>g-a),remark:'Total Power Generation − Auxiliary Consumption'},
+    {label:'Import',unit:'kWh',...sumOnInputs([im],x=>x),remark:'TOTAL IMPORT FROM GRID(KWh)',source:true},
+    {label:'Total Power (Own + Import)',unit:'kWh',...sumOnInputs([g,a,im],(g,a,im)=>g-a+im),remark:'Balance + Import'},
+    {label:'Export',unit:'kWh',...sumOnInputs([ex],x=>x),remark:'TOTAL EXPORT TO GRID(KWh)',source:true},
+    {label:'Consumption',unit:'kWh',...sumOnInputs([c],x=>x),remark:'TOTAL IMPORT FROM (CPP+GRID) KWh',source:true},
+    {label:'Balance After Consumption',unit:'kWh',...loss,remark:'Total Power (Own + Import) − Export − Consumption'},
+    {label:'Transformer Loss %',unit:'%',value:lossPct,n:loss.n,total:loss.total,remark:'Balance After Consumption ÷ Total Power (Own + Import) × 100'},
+    {label:'% Auxiliary Consumption',unit:'%',...sumOnInputs([auxPct],x=>x,true),remark:'CPP Auxiliary Consumption % (daily average for date ranges)'},
+    {label:'PLF %',unit:'%',...sumOnInputs([plf],x=>x,true),remark:'CPP PLF % (daily average for date ranges)'}
   ];
 }
 function renderTopPowerCard(dateFrom,dateTo){
   const rows=computeTopPowerCards(dateFrom,dateTo);
-  return `<div class="kpi-card power-balance-card" id="powerBalanceCard" aria-label="Power Balance">
-    <div class="power-balance-head"><h2>Power Balance</h2><span>${toISO(dateFrom)} to ${toISO(dateTo)}</span></div>
-    <dl class="power-balance-values">${rows.map(r=>`<div class="power-balance-metric"><dt>${r.label}</dt><dd>${r.value==null?'N/A':fmt(r.value,2)}<span class="kpi-unit">${r.unit}</span></dd><small>${r.n?'<span class="chip live">LIVE'+(r.n<r.total?' (partial)':'')+'</span> '+r.n+'/'+r.total+' days':'Source data unavailable'}</small></div>`).join('')}</dl>
-    <details class="power-balance-details"><summary>Calculation &amp; source details</summary><ul>${rows.map(r=>`<li><b>${r.label}:</b> ${r.formula}. ${r.detail}.</li>`).join('')}</ul></details>
+  return `<div class="kpi-card power-balance-card" id="powerBalanceCard">
+    <details id="powerBalanceDisclosure"${powerBalanceOpen?' open':''}>
+      <summary class="power-balance-head"><span class="power-balance-title">Power Balance</span><span>${toISO(dateFrom)} to ${toISO(dateTo)}<br><span class="power-balance-toggle-hint">Click to show / hide table</span></span></summary>
+      <div class="table-wrap"><table id="powerBalanceTable"><thead><tr><th>Parameter</th><th>Value</th><th>Unit</th><th>Remarks / Source</th><th>Coverage</th></tr></thead><tbody>
+      ${rows.map(r=>`<tr><th scope="row">${r.label}</th><td class="power-balance-value">${r.value==null?'N/A':fmt(r.value,r.unit==='%'?2:0)}</td><td>${r.unit}</td><td class="power-balance-remark">${r.remark}${r.source?' <a href="'+POWER_BALANCE_SOURCE+'" target="_blank" rel="noopener noreferrer">Open sheet</a>':''}</td><td>${r.n?'<span class="chip live">LIVE'+(r.n<r.total?' (partial)':'')+'</span> '+r.n+'/'+r.total+' days':'Source data unavailable'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="power-balance-footnote">Energy totals use kWh. Derived values use matching source dates; partial coverage is shown per row. Transformer Loss % uses the ratio of period totals; zero Total Power gives N/A. Values are calculated before rounding.</p>
+    </details>
   </div>`;
+}
+function bindPowerBalanceCard(){
+  const disclosure=document.getElementById('powerBalanceDisclosure');
+  if(disclosure)disclosure.addEventListener('toggle',()=>{powerBalanceOpen=disclosure.open;});
 }
 
 function renderKPIs(){
@@ -2099,6 +2113,7 @@ function renderKPIs(){
   }).join('') + renderTopPowerCard(state.dateFrom,state.dateTo);
   positionKpiHoverPanels();
   renderQualityConformanceDetails(qualityConformance);
+  bindPowerBalanceCard();
 }
 // Positions each KPI hover panel so it never overflows the viewport: measured once per render
 // (panels are display:none by default and shown purely via CSS :hover, so this briefly makes a
@@ -5008,8 +5023,8 @@ async function doLiveQualityRefresh(){
       stopResult.errors = (stopResult.errors||[]).concat('Published Plant Stoppage CSV: '+csvRowsResult.error+' -- falling back to Apps Script stoppage data only.');
     }
     const cachedGridRows = payload.worksheets && payload.worksheets['Transpose Main Cement Plant Electrical for Process'];
-    const cachedGrid = cachedGridRows ? readTopGridExport(cachedGridRows) : {daily:{}};
-    TOP_GRID_EXPORT_DAILY = gridExportResult.error ? cachedGrid.daily : gridExportResult.daily;
+    const cachedGrid = cachedGridRows ? readTopGridExport(cachedGridRows) : {daily:{import:{},export:{},consumption:{}}};
+    TOP_GRID_POWER_DAILY = gridExportResult.error ? cachedGrid.daily : gridExportResult.daily;
     const powerResult = refreshLivePower(payload);
     const targetProdResult = refreshLiveTargetProduction(payload);
     const clinkerResult = refreshLiveClinkerFactor(payload);
