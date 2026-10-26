@@ -523,7 +523,22 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 .quality-section-summary { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding:12px 16px; margin:8px 0 10px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); color:var(--text-secondary); font-size:13px; }
 .quality-section-summary strong { color:var(--text-primary); font-size:15px; }
 [data-theme="glass"] .quality-section-summary { background:rgba(13,34,50,0.85); border-color:rgba(39,232,255,0.4); }
-.top-power-start { grid-column:1; }
+
+.power-balance-card { grid-column:1 / -1; }
+.power-balance-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.power-balance-head h2 { margin:0; font-size:16px; color:var(--text); }
+.power-balance-head > span { font-size:11px; color:var(--text-muted); }
+.power-balance-values { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 24px; margin:0; }
+.power-balance-metric { padding:12px 0; border-bottom:1px solid var(--border); }
+.power-balance-metric dt { color:var(--text-muted); font-size:11px; font-weight:700; }
+.power-balance-metric dd { margin:4px 0; font-size:24px; line-height:1.2; font-weight:800; }
+.power-balance-metric small { font-size:10px; color:var(--text-muted); }
+.power-balance-details { margin-top:12px; font-size:11px; color:var(--text-muted); }
+.power-balance-details summary { cursor:pointer; }
+.power-balance-details li { margin:6px 0; }
+@media (max-width:700px) { .power-balance-values { grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 12px; } .power-balance-head { align-items:flex-start; flex-direction:column; } }
+@media (max-width:420px) { .power-balance-values { grid-template-columns:1fr; } }
+
 </style>
 </head>
 <body>
@@ -1905,9 +1920,13 @@ function computeTopPowerCards(dateFrom,dateTo){
     {label:'PLF %',unit:'%',...sumOnInputs([plf],x=>x,true),formula:'PLF (CPP)',detail:'Average of recorded daily percentages'}
   ];
 }
-function topPowerCardDescriptors(dateFrom,dateTo){
-  return computeTopPowerCards(dateFrom,dateTo).map((r,i)=>({label:r.label,value:r.value==null?'N/A':fmt(r.value,2),unit:r.unit,delta:null,
-    sub:r.formula+'<br>'+r.detail+'<br>'+(r.n?'<span class="chip live">LIVE'+(r.n<r.total?' (partial)':'')+'</span> '+r.n+'/'+r.total+' days':'Source data unavailable'),topPowerStart:i===0}));
+function renderTopPowerCard(dateFrom,dateTo){
+  const rows=computeTopPowerCards(dateFrom,dateTo);
+  return `<div class="kpi-card power-balance-card" id="powerBalanceCard" aria-label="Power Balance">
+    <div class="power-balance-head"><h2>Power Balance</h2><span>${toISO(dateFrom)} to ${toISO(dateTo)}</span></div>
+    <dl class="power-balance-values">${rows.map(r=>`<div class="power-balance-metric"><dt>${r.label}</dt><dd>${r.value==null?'N/A':fmt(r.value,2)}<span class="kpi-unit">${r.unit}</span></dd><small>${r.n?'<span class="chip live">LIVE'+(r.n<r.total?' (partial)':'')+'</span> '+r.n+'/'+r.total+' days':'Source data unavailable'}</small></div>`).join('')}</dl>
+    <details class="power-balance-details"><summary>Calculation &amp; source details</summary><ul>${rows.map(r=>`<li><b>${r.label}:</b> ${r.formula}. ${r.detail}.</li>`).join('')}</ul></details>
+  </div>`;
 }
 
 function renderKPIs(){
@@ -2059,7 +2078,6 @@ function renderKPIs(){
         targetHasSource: true, targetN: kilnSpHeatTarget.n, targetTotal: kilnSpHeatTarget.total,
         actualN: kilnSpHeatActual.n, actualTotal: kilnSpHeatActual.total } },
   ];
-  cards.push(...topPowerCardDescriptors(state.dateFrom,state.dateTo));
   grid.innerHTML = cards.map(c=>{
     const hasDelta = c.delta!=null;
     const up = c.delta>=0;
@@ -2071,14 +2089,14 @@ function renderKPIs(){
     const isGood = goodIsUp ? up : !up;
     const dirClass = isGood ? 'up' : 'down';
     const deltaHtml = hasDelta ? `<div class="kpi-delta ${dirClass}">${arrow} ${fmt(Math.abs(c.delta),1)}${c.unit==='%'?' pts':'%'} vs target</div>` : '';
-    return `<div class="kpi-card${c.topPowerStart?' top-power-start':''}${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
+    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}<span class="kpi-unit">${c.unit}</span></div>
       ${deltaHtml}
       <div class="kpi-sub">${c.sub}</div>
       ${c.hover ? buildKpiHoverPanel(c.hover) : ''}
     </div>`;
-  }).join('');
+  }).join('') + renderTopPowerCard(state.dateFrom,state.dateTo);
   positionKpiHoverPanels();
   renderQualityConformanceDetails(qualityConformance);
 }
