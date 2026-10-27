@@ -192,6 +192,7 @@ select.select-input, .select-input {
 /* A hover table can be intrinsically wider than the panel (long section names, several numeric
    columns with white-space:nowrap) -- scroll INSIDE the panel rather than let it bleed out over
    whatever is underneath on the page. */
+.consumption-power-panel { max-height:70vh; overflow-y:auto; }
 .kpi-hover-table-wrap { overflow-x:auto; max-width:100%; }
 .kpi-hover-panel::before {
   content:''; position:absolute; top:-7px; left:22px; width:12px; height:12px; transform:rotate(45deg);
@@ -1766,13 +1767,58 @@ function computeConsumptionPowerWindow(dateFrom,dateTo) {
     cementBadge:result.cementSpecific===null?'SAMPLE':(partialRates.length?'LIVE (partial)':'LIVE')};
 }
 
+// Target allocation uses the same material quantities as Actual, replacing only
+// section-specific power rates with the Production & MTBF table TARGET POWER.
+function calculateConsumptionTargetPower(input,rates){
+  const targetInput={...input};
+  const mappings=[['Additive Crusher','additiveProduction','additiveKwh'],['Crusher','limestoneProduction','limestoneKwh'],['Raw Mill','rawMillProduction','rawMillKwh'],['Coal Mill','fuelProduction','fuelKwh'],['Kiln','clinkerProduction','kilnKwh']];
+  mappings.forEach(([section,production,energy])=>{
+    const qty=targetInput[production],rate=rates[section];
+    targetInput[energy]=qty===0?0:(Number.isFinite(qty)&&qty>=0&&Number.isFinite(rate)&&rate>=0?qty*rate:null);
+    targetInput[energy.replace('Kwh','MeterKwh')]=targetInput[energy];
+  });
+  const grinding=(qty,rate)=>qty===0?0:(Number.isFinite(qty)&&qty>=0&&Number.isFinite(rate)&&rate>=0?qty*rate:null);
+  targetInput.ppcKwh=grinding(input.ppcProduction,rates['Cement Mill PPC']);
+  targetInput.opcKwh=grinding(input.opcProduction,rates['Cement Mill OPC']);
+  return {...calculateConsumptionSpecificPower(targetInput),input:targetInput,rates};
+}
+function computeConsumptionTargetWindow(dateFrom,dateTo,actual){
+  const input={...actual.input},rates={};
+  const mappings=[['Additive Crusher','additiveProduction'],['Crusher','limestoneProduction'],['Raw Mill','rawMillProduction'],['Coal Mill','fuelProduction'],['Kiln','clinkerProduction']];
+  // Target calculations require material production coverage, not electrical readings.
+  mappings.forEach(([section,field])=>{
+    const prod=realActualSum(section,dateFrom,dateTo);
+    const usable=section==='Kiln'?prod.full:prod.covered>0;
+    input[field]=usable?prod.prod:null;
+  });
+  [...mappings.map(m=>m[0]),'Cement Mill PPC','Cement Mill OPC'].forEach(section=>{
+    rates[section]=computeSectionRow(section,dateFrom,dateTo).targetPower;
+  });
+  return calculateConsumptionTargetPower(input,rates);
+}
+function buildConsumptionTargetHover(h){
+  const t=h.targetCalculation;if(!t)return '';
+  const rows=t.sections.map(row=>`<tr><td class="rowhead">${row.label}</td><td>${fmt(row.consumed,3)}</td><td>${fmt(row.specific,5)}</td><td>${fmt(row.allocatedKwh,3)}</td></tr>`).join('');
+  const cement=h.metric==='cement'?`<tr><td class="rowhead" colspan="3">Overall actual clinker factor</td><td>${fmt(t.overallClinkerFactor===null?null:t.overallClinkerFactor*100,5)}%</td></tr>
+    <tr><td class="rowhead">PPC grinding target</td><td>${fmt(t.input.ppcProduction,3)}</td><td>${fmt(t.rates['Cement Mill PPC'],5)}</td><td>${fmt(t.input.ppcKwh,3)}</td></tr>
+    <tr><td class="rowhead">OPC grinding target</td><td>${fmt(t.input.opcProduction,3)}</td><td>${fmt(t.rates['Cement Mill OPC'],5)}</td><td>${fmt(t.input.opcKwh,3)}</td></tr>
+    <tr><td class="rowhead" colspan="3">Production-weighted cement grinding target (kWh/MT)</td><td>${fmt(t.cementGrindingSpecific,5)}</td></tr>
+    <tr><td class="rowhead" colspan="3">= Till Cement target (kWh/MT)</td><td>${fmt(t.cementSpecific,2)}</td></tr>`:'';
+  return `<div class="kpi-hover-title" style="margin-top:14px">Target calculation — consumption basis</div>
+    <div class="kpi-hover-table-wrap"><table class="kpi-hover-table"><thead><tr><th>Section</th><th>Consumed MT</th><th>Target kWh/MT</th><th>Target kWh</th></tr></thead><tbody>${rows}</tbody><tfoot>
+    <tr><td class="rowhead" colspan="3">Total allocated target power (kWh)</td><td>${fmt(t.clinkerKwh,3)}</td></tr>
+    <tr><td class="rowhead" colspan="3">Clinker production (MT)</td><td>${fmt(t.input.clinkerProduction,5)}</td></tr>
+    <tr><td class="rowhead" colspan="3">= Till Clinkerization target (kWh/MT)</td><td>${fmt(t.clinkerSpecific,5)}</td></tr>${cement}</tfoot></table></div>
+    <div class="kpi-hover-note">Target rates come from the same TARGET POWER values shown in Production &amp; MTBF — Section-wise for this date filter. Material quantities, 4% return-dust deduction and clinker factors follow Actual. Cement target = clinkerization target × overall actual clinker factor + production-weighted PPC/OPC grinding target. Zero-production sections contribute zero power.</div>`;
+}
+
 function buildConsumptionPowerHover(h) {
   const c = h.calculation, input = c.input;
   const reasons = h.metric==='cement' ? c.cementReasons : c.clinkerReasons;
   const missing = (reasons.length ? '<div class="kpi-hover-note">'+reasons.join('. ')+'. Missing required readings remain unavailable.</div>' : '')
     +(c.rateCoverageNote?'<div class="kpi-hover-note">'+c.rateCoverageNote+'</div>':'');
   if(h.metric==='cement'){
-    return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.cementBadge)} Specific Power Till Cement</div>
+    return `<div class="kpi-hover-panel consumption-power-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.cementBadge)} Specific Power Till Cement</div>
       <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:430px;"><thead><tr><th>Calculation</th><th>Actual</th></tr></thead><tbody>
       <tr><td class="rowhead">Specific Power Till Clinkerization (unrounded)</td><td>${fmt(c.clinkerSpecific,5)} kWh/MT</td></tr>
       <tr><td class="rowhead">Overall clinker factor: (PPC MT × PPC factor + OPC MT × OPC factor) ÷ total cement MT</td><td>${fmt(c.overallClinkerFactor===null?null:c.overallClinkerFactor*100,5)}%</td></tr>
@@ -1781,16 +1827,16 @@ function buildConsumptionPowerHover(h) {
       <tr><td class="rowhead">Total cement production</td><td>${fmt(input.cementProduction,5)} MT</td></tr>
       <tr><td class="rowhead">Cement grinding power ÷ cement production</td><td>${fmt(c.cementGrindingSpecific,5)} kWh/MT</td></tr>
       </tbody><tfoot><tr><td class="rowhead">Clinkerization specific power × overall clinker factor + cement grinding specific power</td><td>${fmt(c.cementSpecific,2)} kWh/MT</td></tr>
-      <tr><td class="rowhead">Existing production-based target</td><td>${fmt(h.target,2)} kWh/MT</td></tr></tfoot></table></div><div class="kpi-hover-note">Zero cement production gives zero specific power. Each zero-production section contributes zero power for that day, including within date-range totals.</div>${missing}</div>`;
+      <tr><td class="rowhead">Consumption-based target</td><td>${fmt(h.target,2)} kWh/MT</td></tr></tfoot></table></div><div class="kpi-hover-note">Zero cement production gives zero specific power. Each zero-production section contributes zero power for that day, including within date-range totals.</div>${missing}${buildConsumptionTargetHover(h)}</div>`;
   }
   const rows=c.sections.map(row=>`<tr><td class="rowhead">${row.label}</td><td>${fmt(row.production,3)}</td><td>${fmt(row.meterEnergy,3)}</td><td>${fmt(row.specific,5)}</td><td>${fmt(row.consumed,3)}</td><td>${fmt(row.allocatedKwh,3)}</td></tr>`).join('');
-  return `<div class="kpi-hover-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.badge)} Specific Power Till Clinkerization</div>
+  return `<div class="kpi-hover-panel consumption-power-panel"><div class="kpi-hover-title">${kpiBadgeHtml(c.badge)} Specific Power Till Clinkerization</div>
     <div class="kpi-hover-table-wrap"><table class="kpi-hover-table" style="min-width:650px;"><thead><tr><th>Section</th><th>Production (MT)</th><th>Meter (kWh)</th><th>kWh/MT material</th><th>Consumed (MT)</th><th>Allocated kWh</th></tr></thead><tbody>${rows}</tbody><tfoot>
     <tr><td class="rowhead" colspan="5">Total allocated power</td><td>${fmt(c.clinkerKwh,3)}</td></tr>
     <tr><td class="rowhead" colspan="5">÷ Clinker production (MT)</td><td>${fmt(input.clinkerProduction,5)}</td></tr>
     <tr><td class="rowhead" colspan="5">= Specific Power Till Clinkerization (kWh/MT)</td><td>${fmt(c.clinkerSpecific,1)}</td></tr>
-    <tr><td class="rowhead" colspan="5">Existing production-based target (kWh/MT)</td><td>${fmt(h.target,1)}</td></tr></tfoot></table></div>
-    <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Zero-production sections contribute zero power for that day; metered standby energy on those days is excluded from date-range totals. No Raw Mill production gives zero current-day limestone mix allocation. Zero clinker production gives zero clinkerization specific power. Full precision is retained until display.</div>${missing}</div>`;
+    <tr><td class="rowhead" colspan="5">Consumption-based target (kWh/MT)</td><td>${fmt(h.target,1)}</td></tr></tfoot></table></div>
+    <div class="kpi-hover-note">Additive consumption = Raw Mill WF-04 + cement black fly ash (FJ). Raw meal consumed = kiln feed × 96%. Limestone consumed = raw meal consumed × (WF-01 dry + WF-02 dry) ÷ raw meal production. Fuel consumed = MB + PC. Zero-production sections contribute zero power for that day; metered standby energy on those days is excluded from date-range totals. No Raw Mill production gives zero current-day limestone mix allocation. Zero clinker production gives zero clinkerization specific power. Full precision is retained until display.</div>${missing}${buildConsumptionTargetHover(h)}</div>`;
 }
 
 // The headline retains its registered main-process parameter list, but every
@@ -2050,16 +2096,11 @@ function renderKPIs(){
   const qualityConformance=computeQualityConformance(state.dateFrom,state.dateTo);
   const qConform=qualityConformance.value;
 
-  // Consumption-adjusted ACTUAL calculations, following Power Calculation.xlsx / Sheet1.
-  // The existing production-based target benchmarks retain their original definitions.
-  const CLINKER_CHAIN = ['Crusher','Raw Mill','Coal Mill','Kiln'];
-  const clinkerChainRows = CLINKER_CHAIN.map(sec => ({sec, r: computeSectionRow(sec, state.dateFrom, state.dateTo)}));
-  const targetKwhSumClinker = clinkerChainRows.reduce((sum,x)=>sum+x.r.targetProd*x.r.targetPower,0);
-  const targetSpecPowerClinker = clinkerTgt>0 ? targetKwhSumClinker/clinkerTgt : null;
-  const CEMENT_CHAIN = ['Additive Crusher','Crusher','Raw Mill','Coal Mill','Kiln','Cement Mill PPC','Cement Mill OPC'];
-  const targetKwhSumCement = CEMENT_CHAIN.reduce((sum,sec)=>{ const r=computeSectionRow(sec,state.dateFrom,state.dateTo); return sum+r.targetProd*r.targetPower; },0);
-  const targetSpecPowerCement = cementTgtTotal>0 ? targetKwhSumCement/cementTgtTotal : null;
+  // Actual calculations are unchanged; Target substitutes the section table's rates.
   const consumptionPower = computeConsumptionPowerWindow(state.dateFrom,state.dateTo);
+  const consumptionTarget = computeConsumptionTargetWindow(state.dateFrom,state.dateTo,consumptionPower);
+  const targetSpecPowerClinker = consumptionTarget.clinkerSpecific;
+  const targetSpecPowerCement = consumptionTarget.cementSpecific;
   const actualSpecPowerClinker = consumptionPower.clinkerSpecific;
   const actualSpecPowerCement = consumptionPower.cementSpecific;
 
@@ -2123,11 +2164,11 @@ function renderKPIs(){
     {label:'Specific Power Till Cement', value: actualSpecPowerCement===null?'N/A':fmt(actualSpecPowerCement,2), unit:'kWh/MT',
       delta: (targetSpecPowerCement!=null && actualSpecPowerCement!=null) ? -(actualSpecPowerCement-targetSpecPowerCement) : null,
       sub: 'Target '+fmt(targetSpecPowerCement,2)+' kWh/MT'+(actualSpecPowerCement===null?'<br>'+consumptionPower.cementReason:(consumptionPower.rateCoverageLabel?'<br>'+consumptionPower.rateCoverageLabel:'')), invert:true,
-      hover: {kind:'consumptionpower', metric:'cement', calculation:consumptionPower, target:targetSpecPowerCement}},
+      hover: {kind:'consumptionpower', metric:'cement', calculation:consumptionPower, target:targetSpecPowerCement, targetCalculation:consumptionTarget}},
     {label:'Specific Power Till Clinkerization', value: actualSpecPowerClinker===null?'N/A':fmt(actualSpecPowerClinker,1), unit:'kWh/MT',
       delta: (targetSpecPowerClinker!=null && actualSpecPowerClinker!=null) ? -(actualSpecPowerClinker-targetSpecPowerClinker) : null,
       sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT'+(actualSpecPowerClinker===null?'<br>'+consumptionPower.clinkerReason:(consumptionPower.rateCoverageLabel?'<br>'+consumptionPower.rateCoverageLabel:'')), invert:true,
-      hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker}},
+      hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker, targetCalculation:consumptionTarget}},
     {label:'Quality Conformance', value:qConform===null?'N/A':fmt(qConform,0), unit:'%', delta:qConform===null?null:qConform-90,
       sub:qualityConformance.within+' / '+qualityConformance.judged+' measured params in range'
         +(qualityConformance.excluded?' · '+qualityConformance.excluded+' excluded':'')+'<br>Click to show / hide calculation backup', qualityAudit:true},
@@ -2197,7 +2238,7 @@ function positionKpiHoverPanels(){
     const panelWidth = panel.getBoundingClientRect().width;
     panel.style.display = ''; panel.style.visibility = '';
     if(cardRect.left + panelWidth > window.innerWidth - 12) panel.classList.add('anchor-right');
-    if(panel.classList.contains('cf-additive-panel')) card.onmouseenter=()=>positionCfAdditiveTooltip(card,panel);
+    if(panel.classList.contains('cf-additive-panel') || panel.classList.contains('consumption-power-panel')) card.onmouseenter=()=>positionCfAdditiveTooltip(card,panel);
   });
 }
 function kpiBadgeHtml(badge){
