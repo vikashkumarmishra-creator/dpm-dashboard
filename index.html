@@ -526,6 +526,10 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 [data-theme="glass"] .quality-section-summary { background:rgba(13,34,50,0.85); border-color:rgba(39,232,255,0.4); }
 
 
+.generation-check-metrics { display:grid; gap:6px; margin:8px 0; }
+.generation-check-metrics > div { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.generation-check-metrics span { color:var(--text-secondary); font-size:10px; }
+.generation-check-metrics strong { color:var(--accent); font-size:16px; white-space:nowrap; }
 .power-balance-card { grid-column:1 / -1; }
 .power-balance-head { display:flex; align-items:center; justify-content:space-between; gap:12px; cursor:pointer; padding:4px 0; }
 .power-balance-title { font-size:16px; font-weight:800; }
@@ -1914,6 +1918,65 @@ function sectionQualitySummaryHtml(model){
     <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed.</p>`;
 }
 
+let GENERATION_CHECK_ROWS=[];
+let GENERATION_CHECK_ERROR='Refresh all live data to load Generation Check.';
+const GENERATION_CHECK_SOURCE='https://docs.google.com/spreadsheets/d/17j0VK8YuGhRKGGDtOl9jB6mu7i-W35cPb4BW3VYyz_0/edit?gid=801501826#gid=801501826';
+function readGenerationCheck(rows){
+  const data=[];
+  if(!Array.isArray(rows))throw new Error('Generation Check readings are unavailable.');
+  const dateCol=findColLive(rows,'Date'),mrssCol=findColLive(rows,'MRSS Load'),diffCol=findColLive(rows,'Difference (Auxiliary)');
+  if(rows.length && (!dateCol||!mrssCol||!diffCol))throw new Error('Generation Check requires Date, MRSS Load and Difference (Auxiliary) columns.');
+  rows.forEach(row=>{
+    const date=parseGvizDate(row[dateCol])||(typeof row[dateCol]==='string'?new Date(row[dateCol]):null);
+    if(!date||isNaN(date))return;
+    data.push({date:toISO(date),mrss:numOrNull(row[mrssCol]),difference:numOrNull(row[diffCol])});
+  });
+  return data;
+}
+async function fetchGenerationCheck(){
+  const url=new URL(document.getElementById('appsScriptUrlInput').value.trim());
+  url.searchParams.set('generationcheck','1');
+  const res=await fetch(url.toString(),{cache:'no-store'});
+  if(!res.ok)throw new Error('Generation Check HTTP '+res.status);
+  const payload=await res.json();return readGenerationCheck(payload.generationCheckRows);
+}
+function setGenerationCheckResult(result){
+  GENERATION_CHECK_ROWS=result.data;GENERATION_CHECK_ERROR=result.error;
+  const card=document.getElementById('generationCheckCard');
+  if(card)card.outerHTML=renderGenerationCheckCard(state.dateFrom,state.dateTo);
+  return result;
+}
+function computeGenerationCheck(dateFrom,dateTo,rows=GENERATION_CHECK_ROWS){
+  const days=isoRangeDays(dateFrom,dateTo),selected=new Set(days);
+  const valid=v=>typeof v==='number'&&Number.isFinite(v);
+  let mrss=0,difference=0,mrssCount=0,differenceCount=0,pairMRSS=0,pairDifference=0,paired=0;
+  const covered=new Set();
+  rows.filter(r=>selected.has(r.date)).forEach(r=>{
+    if(valid(r.mrss)){mrss+=r.mrss;mrssCount++;covered.add(r.date);}
+    if(valid(r.difference)){difference+=r.difference;differenceCount++;covered.add(r.date);}
+    if(valid(r.mrss)&&valid(r.difference)){pairMRSS+=r.mrss;pairDifference+=r.difference;paired++;}
+  });
+  return {mrss:mrssCount?mrss:null,difference:differenceCount?difference:null,
+    percent:paired&&pairMRSS!==0?pairDifference/pairMRSS*100:null,
+    mrssCount,differenceCount,paired,covered:covered.size,total:days.length,
+    partial:covered.size>0&&covered.size<days.length};
+}
+function renderGenerationCheckCard(dateFrom,dateTo){
+  const r=computeGenerationCheck(dateFrom,dateTo);
+  const number=(v,d)=>v==null?'N/A':fmt(v,d);
+  const note=GENERATION_CHECK_ERROR?(GENERATION_CHECK_ROWS.length?'Source unavailable — refresh again':GENERATION_CHECK_ERROR==='Refresh all live data to load Generation Check.'?GENERATION_CHECK_ERROR:'Source unavailable — refresh again'):r.covered?r.covered+'/'+r.total+' days · '+r.mrssCount+' MRSS / '+r.differenceCount+' auxiliary readings':'No readings for selected dates';
+  const pairNote=r.paired!==r.mrssCount||r.paired!==r.differenceCount?' Percentage uses '+r.paired+' matched readings.':'';
+  return `<div class="kpi-card generation-check-card" id="generationCheckCard">
+    <div class="kpi-label">Generation Check</div>
+    <div class="generation-check-metrics">
+      <div><span>MRSS Load (sum)</span><strong>${number(r.mrss,3)}</strong></div>
+      <div><span>Difference (Auxiliary) (sum)</span><strong>${number(r.difference,3)}</strong></div>
+      <div title="Sum of Difference (Auxiliary) divided by sum of MRSS Load, multiplied by 100"><span>Difference (Auxiliary) %</span><strong>${number(r.percent,2)}${r.percent==null?'':'%'}</strong></div>
+    </div>
+    <div class="kpi-sub">${note}${pairNote}<br><a href="${GENERATION_CHECK_SOURCE}" target="_blank" rel="noopener noreferrer">Source / calculation</a><span title="Difference = TG Load − MRSS Load − Intel Well. Period % = sum of Difference ÷ sum of MRSS Load × 100; calculated on matching readings."> ⓘ</span></div>
+  </div>`;
+}
+
 let TOP_GRID_POWER_DAILY = {import:{},export:{},consumption:{}};
 let powerBalanceOpen = false;
 const POWER_BALANCE_SOURCE = 'https://docs.google.com/spreadsheets/d/1yuChL3YrxWUMYu0UcWoyeq1oBITlbrKFfvAR7l5tYTE/edit?gid=1132400226#gid=1132400226';
@@ -2230,7 +2293,7 @@ function renderKPIs(){
       <div class="kpi-sub">${c.sub}</div>
       ${c.hover ? buildKpiHoverPanel(c.hover) : ''}
     </div>`;
-  }).join('') + renderTopPowerCard(state.dateFrom,state.dateTo);
+  }).join('') + renderGenerationCheckCard(state.dateFrom,state.dateTo) + renderTopPowerCard(state.dateFrom,state.dateTo);
   positionKpiHoverPanels();
   renderQualityConformanceDetails(qualityConformance);
   bindPowerBalanceCard();
@@ -5128,11 +5191,12 @@ async function doLiveQualityRefresh(){
     // Fetch your Apps Script payload and the published Plant Stoppage CSV concurrently -- the CSV
     // fetch is a plain static-file request so it typically finishes long before the Apps Script
     // call does; running them together means the CSV never adds to the wait.
-    const [payload, csvRowsResult, gridExportResult, cfAdditiveResult] = await Promise.all([
+    const [payload, csvRowsResult, gridExportResult, cfAdditiveResult, generationCheckResult] = await Promise.all([
       fetchLiveApiPayload(true),
       fetchPublishedStoppageCsv().then(rows => ({rows, error: null})).catch(e => ({rows: null, error: e.message})),
       fetchTopGridExport().then(daily=>({daily,error:null})).catch(e=>({daily:{},error:e.message})),
       fetchClinkerAdditives().then(data=>({data,error:null})).catch(e=>({data:null,error:e.message})),
+      fetchGenerationCheck().then(data=>setGenerationCheckResult({data,error:null})).catch(e=>setGenerationCheckResult({data:[],error:e.message})),
     ]);
     if(refreshTicker){ clearInterval(refreshTicker); refreshTicker = null; }
     const {data, errors} = refreshLiveQuality(payload);
@@ -5150,6 +5214,8 @@ async function doLiveQualityRefresh(){
     const cachedGridRows = payload.worksheets && payload.worksheets['Transpose Main Cement Plant Electrical for Process'];
     const cachedGrid = cachedGridRows ? readTopGridExport(cachedGridRows) : {daily:{import:{},export:{},consumption:{}}};
     TOP_GRID_POWER_DAILY = gridExportResult.error ? cachedGrid.daily : gridExportResult.daily;
+    GENERATION_CHECK_ROWS=generationCheckResult.data;
+    GENERATION_CHECK_ERROR=generationCheckResult.error;
     const powerResult = refreshLivePower(payload);
     const targetProdResult = refreshLiveTargetProduction(payload);
     const clinkerResult = refreshLiveClinkerFactor(payload);
@@ -5173,6 +5239,7 @@ async function doLiveQualityRefresh(){
     const allErrors = errors.concat(targetResult.errors, prodResult.errors, stopResult.errors, powerResult.errors, targetProdResult.errors, clinkerResult.errors, cppResult.errors, spHeatResult.errors, specificPowerResult.errors);
     if(gridExportResult.error) allErrors.push('Grid Export: '+gridExportResult.error);
     if(cfAdditiveResult.error) allErrors.push('Clinker additives: '+cfAdditiveResult.error);
+    if(generationCheckResult.error) allErrors.push('Generation Check: '+generationCheckResult.error);
     const stamp = new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
     if(gotAny || targetResult.updated>0 || gotProd || gotStop || gotPower || gotTargetProd || gotAdditive || gotClinkerActual || gotCppActual || gotCppTarget || gotSpHeatTarget || gotSpHeatActual){
       if(gotAny) REAL_QUALITY = data;
