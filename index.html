@@ -620,6 +620,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
   <div class="section">
     <div class="kpi-grid" id="kpiGrid"></div>
     <section class="section quality-conformance-details" id="qualityConformanceDetails" hidden aria-label="Quality Conformance calculation backup"></section>
+    <section class="section quality-conformance-details" id="qualityCementConformanceDetails" hidden aria-label="Cement Quality Conformance calculation backup"></section>
   </div>
 
   <!-- PRODUCTION / MTBF TABLE -->
@@ -1845,7 +1846,7 @@ function buildConsumptionPowerHover(h) {
 
 // The headline retains its registered main-process parameter list, but every
 // verdict now comes from the same real readings and live limits as the tables.
-let qualityConformanceOpen=false;
+const qualityConformancePanels={clinker:false,cement:false};
 function qualityHasLimits(target){
   return !!target && target.Target!=null && Number.isFinite(target.Min) && Number.isFinite(target.Max) && target.Min<=target.Max;
 }
@@ -1877,41 +1878,61 @@ function computeSectionQualitySummary(g,dateFrom,dateTo){
     if(row.oorReady){oorReady++;weightedSum+=row.contribution;}
   });
   return {entries,eligible:eligible.length,weight,judged,within,oorReady,
-    weightedOor:eligible.length>0 && oorReady===eligible.length?weightedSum:null};
+    weightedOor:eligible.length>0 && oorReady===eligible.length?weightedSum:null,...qualitySampleTotals(entries)};
 }
-function computeQualityConformance(dateFrom,dateTo){
-  const rows=RESOURCE.dim_parameter.filter(p=>p.Target!=null).map(source=>{
-    const target=PARAM_LOOKUP[paramKey(source.Section_Name,source.Parameter_Name)]||source;
-    const eligible=qualityHasLimits(target);
-    const stat=realQualityStat(source.Section_Name,source.Parameter_Name,dateFrom,dateTo,eligible?target.Min:null,eligible?target.Max:null);
-    const judged=eligible && stat.avg!==null;
-    return {section:source.Section_Name==='Coal Mill'?'Fuel Mill':source.Section_Name,param:source.Parameter_Name,target,stat,judged,
-      status:!eligible?'No valid limits':stat.avg===null?'No data':stat.avg>=target.Min && stat.avg<=target.Max?'Within spec':'Out of spec'};
+function qualitySampleTotals(entries){
+  const stats=entries.map(row=>row.stat),known=stats.filter(s=>s.n>0),assessed=stats.filter(s=>s.oor!==null);
+  return {sampleTotal:known.length?known.reduce((sum,s)=>sum+s.n,0):null,
+    oorTotal:assessed.length?assessed.reduce((sum,s)=>sum+s.oor,0):null,
+    assessedSampleTotal:assessed.reduce((sum,s)=>sum+s.oorSamples,0)};
+}
+function computeQualityConformance(dateFrom,dateTo,kind='clinker'){
+  let entries;
+  if(kind==='cement'){
+    entries=QUALITY_GROUPS.filter(g=>g.real&&['PPC','OPC'].includes(g.cementType)).flatMap(g=>
+      qualityGroupEntries(g).map(row=>({...row,section:'Cement '+g.cementType,param:row.param})));
+  }else{
+    const order={'Crusher':0,'Raw Mill':1,'Coal Mill':2,'Kiln Feed':3,'Kiln':3};
+    entries=Object.values(PARAM_LOOKUP).filter(target=>Object.hasOwn(order,target.Section_Name)&&target.Target!=null)
+      .map(target=>{
+        const dataKey=target.Section_Name;
+        const param=Object.keys(REAL_QUALITY[dataKey]||{}).find(p=>paramKey(dataKey,p)===paramKey(dataKey,target.Parameter_Name))||target.Parameter_Name;
+        return {target,dataKey,param,section:dataKey==='Coal Mill'?'Fuel Mill':dataKey==='Kiln Feed'?'Kiln':dataKey,
+          name:(dataKey==='Kiln Feed'?'Kiln Feed — ':'')+target.Parameter_Name,order:order[dataKey]};
+      }).sort((a,b)=>a.order-b.order);
+  }
+  const rows=entries.map(entry=>{
+    const target=entry.target,eligible=qualityHasLimits(target);
+    const stat=realQualityStat(entry.dataKey,entry.param,dateFrom,dateTo,eligible?target.Min:null,eligible?target.Max:null);
+    const judged=eligible&&stat.avg!==null;
+    return {...entry,displayParam:entry.name||entry.param,stat,judged,
+      status:!eligible?'No valid limits':stat.avg===null?'No data':stat.avg>=target.Min&&stat.avg<=target.Max?'Within spec':'Out of spec'};
   });
   const judged=rows.filter(r=>r.judged).length,within=rows.filter(r=>r.status==='Within spec').length;
-  return {rows,registered:rows.length,judged,within,excluded:rows.length-judged,value:judged?within/judged*100:null,
-    partial:rows.some(r=>!r.judged || !r.stat.full)};
+  return {kind,title:kind==='cement'?'Quality Conformance of Cement':'Quality Conformance Till Clinker',rows,
+    registered:rows.length,judged,within,excluded:rows.length-judged,value:judged?within/judged*100:null,
+    partial:rows.some(r=>!r.judged||!r.stat.full),...qualitySampleTotals(rows)};
 }
 function renderQualityConformanceDetails(model){
-  const panel=document.getElementById('qualityConformanceDetails');
-  if(!panel)return;
-  panel.hidden=!qualityConformanceOpen;
-  const card=document.getElementById('qualityConformanceCard');
-  if(card){
-    card.setAttribute('aria-expanded',String(qualityConformanceOpen));
-    const toggle=()=>{qualityConformanceOpen=!qualityConformanceOpen;panel.hidden=!qualityConformanceOpen;card.setAttribute('aria-expanded',String(qualityConformanceOpen));};
-    card.addEventListener('click',toggle);
-    card.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}});
-  }
-  const safe=value=>escAttr(value);
-  const rows=model.rows.map(row=>`<tr><td class="rowhead">${safe(row.section)}</td><td>${safe(row.param)}</td><td>${fmt(row.target.Target,2)}</td><td>${fmt(row.target.Min,3)}</td><td>${fmt(row.target.Max,3)}</td><td><b>${fmt(row.stat.avg,3)}</b></td><td>${row.stat.n}</td><td>${row.stat.covered}/${row.stat.total}</td><td><span class="status-chip ${row.status==='Within spec'?'good':row.status==='Out of spec'?'critical':''}">${row.status}</span></td><td>${row.judged?'Yes':'Excluded'}</td></tr>`).join('');
-  panel.innerHTML=`<div class="section-head"><h2>Quality Conformance — calculation backup</h2><button class="preset-btn" id="closeQualityConformance">Hide table</button></div>
+  const cement=model.kind==='cement',panelId=cement?'qualityCementConformanceDetails':'qualityConformanceDetails';
+  const cardId=cement?'qualityCementConformanceCard':'qualityConformanceCard',closeId=cement?'closeCementQualityConformance':'closeQualityConformance';
+  const panel=document.getElementById(panelId);if(!panel)return;
+  const key=cement?'cement':'clinker',card=document.getElementById(cardId);
+  panel.hidden=!qualityConformancePanels[key];
+  const toggle=()=>{qualityConformancePanels[key]=!qualityConformancePanels[key];panel.hidden=!qualityConformancePanels[key];if(card)card.setAttribute('aria-expanded',String(qualityConformancePanels[key]));};
+  if(card){card.setAttribute('aria-expanded',String(qualityConformancePanels[key]));card.addEventListener('click',toggle);
+    card.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}});}
+  const rows=model.rows.map(row=>`<tr><td class="rowhead">${escAttr(row.section)}</td><td>${escAttr(row.displayParam)}</td><td>${fmt(row.target?.Target,2)}</td><td>${fmt(row.target?.Min,3)}</td><td>${fmt(row.target?.Max,3)}</td><td><b>${fmt(row.stat.avg,3)}</b></td><td>${row.stat.n||'&mdash;'}</td><td>${row.stat.oor===null?'&mdash;':row.stat.oor}</td><td>${row.stat.covered}/${row.stat.total}</td><td><span class="status-chip ${row.status==='Within spec'?'good':row.status==='Out of spec'?'critical':''}">${row.status}</span></td><td>${row.judged?'Yes':'Excluded'}</td></tr>`).join('');
+  panel.innerHTML=`<div class="section-head"><h2>${model.title} — calculation backup</h2><button class="preset-btn" id="${closeId}">Hide table</button></div>
     <p class="hint">${toISO(state.dateFrom)} to ${toISO(state.dateTo)}. Conformance = parameters whose actual average is within Min–Max ÷ parameters with real readings and valid limits × 100.</p>
     <div class="quality-section-summary"><strong>${model.value===null?'N/A':fmt(model.value,2)+'%'} = ${model.within} ÷ ${model.judged} × 100</strong><span>${model.registered} registered parameters; ${model.excluded} excluded because readings or valid limits are unavailable.</span></div>
-    <p class="hint">This card covers the registered main-process parameters in Dim_Parameter, preserving its original scope. Cement parameters are included in their section summaries below. The verdict uses the selected period’s actual average; OOR % in the Quality Parameters tables measures individual sample breaches.</p>
-    <div class="table-wrap"><table><thead><tr><th>Section</th><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual avg</th><th>Samples</th><th>Days covered</th><th>Result</th><th>In calculation</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td class="rowhead" colspan="8">Within spec / assessed parameters</td><td>${model.within} / ${model.judged}</td><td>${model.value===null?'N/A':fmt(model.value,2)+'%'}</td></tr></tfoot></table></div>`;
-  document.getElementById('closeQualityConformance').addEventListener('click',()=>{qualityConformanceOpen=false;panel.hidden=true;if(card){card.setAttribute('aria-expanded','false');card.focus();}});
+    <p class="hint">${cement?'PPC and OPC parameters match the Cement Quality Parameters tabs. The 7-day and 28-day strength tests remain in Compressive Strength.':'Section order: Crusher → Raw Mill → Fuel Mill → Kiln. Crusher chemistry uses HG ILS samples, including LSF. Kiln Feed readings are listed under Kiln and labelled separately.'} The verdict uses the selected period’s actual average; OOR counts measure individual sample breaches.</p>
+    <div class="table-wrap"><table><thead><tr><th>Section</th><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual avg</th><th>Total Sample Count</th><th>OOR (Count)</th><th>Days covered</th><th>Result</th><th>In calculation</th></tr></thead><tbody>${rows}</tbody><tfoot>
+    <tr><td class="rowhead" colspan="6" title="Totals add parameter readings; a physical sample tested for several parameters contributes once to each parameter.">Total parameter counts</td><td>${fmt(model.sampleTotal,0)}</td><td>${fmt(model.oorTotal,0)}</td><td colspan="3">OOR assessed for ${fmt(model.assessedSampleTotal,0)} parameter readings</td></tr>
+    <tr><td class="rowhead" colspan="9">Within spec / assessed parameters</td><td>${model.within} / ${model.judged}</td><td>${model.value===null?'N/A':fmt(model.value,2)+'%'}</td></tr></tfoot></table></div>`;
+  document.getElementById(closeId).addEventListener('click',()=>{qualityConformancePanels[key]=false;panel.hidden=true;if(card){card.setAttribute('aria-expanded','false');card.focus();}});
 }
+
 function sectionQualitySummaryHtml(model){
   return `<div class="quality-section-summary"><strong>Overall weighted OOR: ${model.weightedOor===null?'N/A':fmt(model.weightedOor,2)+'%'}</strong>
     <span>Equal weight: ${model.weight===null?'N/A':fmt(model.weight,2)+'%'} per parameter</span><span>OOR data: ${model.oorReady}/${model.eligible} parameters</span><span>Actual averages within spec: ${model.within}/${model.judged}</span></div>
@@ -2169,6 +2190,7 @@ function renderKPIs(){
 
   const qualityConformance=computeQualityConformance(state.dateFrom,state.dateTo);
   const qConform=qualityConformance.value;
+  const cementConformance=computeQualityConformance(state.dateFrom,state.dateTo,'cement');
 
   // Actual calculations are unchanged; Target substitutes the section table's rates.
   const consumptionPower = computeConsumptionPowerWindow(state.dateFrom,state.dateTo);
@@ -2243,9 +2265,12 @@ function renderKPIs(){
       delta: (targetSpecPowerClinker!=null && actualSpecPowerClinker!=null) ? -(actualSpecPowerClinker-targetSpecPowerClinker) : null,
       sub: 'Target '+fmt(targetSpecPowerClinker,1)+' kWh/MT'+(actualSpecPowerClinker===null?'<br>'+consumptionPower.clinkerReason:(consumptionPower.rateCoverageLabel?'<br>'+consumptionPower.rateCoverageLabel:'')), invert:true,
       hover: {kind:'consumptionpower', metric:'clinker', calculation:consumptionPower, target:targetSpecPowerClinker, targetCalculation:consumptionTarget}},
-    {label:'Quality Conformance', value:qConform===null?'N/A':fmt(qConform,0), unit:'%', delta:qConform===null?null:qConform-90,
+    {label:'Quality Conformance Till Clinker', value:qConform===null?'N/A':fmt(qConform,0), unit:'%', delta:qConform===null?null:qConform-90,
       sub:qualityConformance.within+' / '+qualityConformance.judged+' measured params in range'
-        +(qualityConformance.excluded?' · '+qualityConformance.excluded+' excluded':'')+'<br>Click to show / hide calculation backup', qualityAudit:true},
+        +(qualityConformance.excluded?' · '+qualityConformance.excluded+' excluded':'')+'<br>Click to show / hide calculation backup', qualityAudit:'clinker'},
+    {label:'Quality Conformance of Cement', value:cementConformance.value===null?'N/A':fmt(cementConformance.value,0), unit:'%', delta:null,
+      sub:cementConformance.within+' / '+cementConformance.judged+' measured params in range'
+        +(cementConformance.excluded?' · '+cementConformance.excluded+' excluded':'')+'<br>Click to show / hide calculation backup', qualityAudit:'cement'},
     {label:'Clinker Factor — PPC', value: fmt(ppcClinkerActual.actual,1), unit:'%', lowerIsBetter: true,
       delta: (ppcClinkerActual.actual!=null && targetClinkerFactorPPC!=null) ? (ppcClinkerActual.actual-targetClinkerFactorPPC) : null,
       sub: 'Target '+fmt(targetClinkerFactorPPC,1)+'%'
@@ -2286,7 +2311,7 @@ function renderKPIs(){
     const isGood = goodIsUp ? up : !up;
     const dirClass = isGood ? 'up' : 'down';
     const deltaHtml = hasDelta ? `<div class="kpi-delta ${dirClass}">${arrow} ${fmt(Math.abs(c.delta),1)}${c.unit==='%'?' pts':'%'} vs target</div>` : '';
-    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="qualityConformanceCard" role="button" tabindex="0" aria-controls="qualityConformanceDetails" aria-expanded="'+qualityConformanceOpen+'"':''}>
+    return `<div class="kpi-card${c.hover?' kpi-hoverable':''}${c.qualityAudit?' quality-audit-card':''}"${c.qualityAudit?' id="'+(c.qualityAudit==='cement'?'qualityCementConformanceCard':'qualityConformanceCard')+'" role="button" tabindex="0" aria-controls="'+(c.qualityAudit==='cement'?'qualityCementConformanceDetails':'qualityConformanceDetails')+'" aria-expanded="'+qualityConformancePanels[c.qualityAudit]+'"':''}>
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value}<span class="kpi-unit">${c.unit}</span></div>
       ${deltaHtml}
@@ -2296,6 +2321,7 @@ function renderKPIs(){
   }).join('') + renderGenerationCheckCard(state.dateFrom,state.dateTo) + renderTopPowerCard(state.dateFrom,state.dateTo);
   positionKpiHoverPanels();
   renderQualityConformanceDetails(qualityConformance);
+  renderQualityConformanceDetails(cementConformance);
   bindPowerBalanceCard();
 }
 // Positions each KPI hover panel so it never overflows the viewport: measured once per render
@@ -3661,7 +3687,8 @@ function renderQualityTabs(){
         <table>
           <thead><tr><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual Avg</th><th>Actual Min</th><th>Actual Max</th><th>Total Sample Count</th><th>OOR (Count)</th><th>OOR %</th><th>Weight %</th><th>Weighted OOR contribution</th><th>Status</th></tr></thead>
           <tbody>${bodyRows}</tbody>
-          <tfoot><tr><td class="rowhead" colspan="9">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
+          <tfoot><tr><td class="rowhead" colspan="7" title="Sum of parameter readings; the same physical sample may be counted once for each parameter tested.">Total parameter counts</td><td>${fmt(sectionSummary.sampleTotal,0)}</td><td>${fmt(sectionSummary.oorTotal,0)}</td><td colspan="4">OOR assessed for ${fmt(sectionSummary.assessedSampleTotal,0)} parameter readings</td></tr>
+          <tr><td class="rowhead" colspan="9">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
         </table>
       </div>
     </div>`;
