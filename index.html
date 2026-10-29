@@ -3341,7 +3341,7 @@ function chartBaseOptions(unit){
 
 /* ============================= Quality tables ============================= */
 const QUALITY_GROUPS = [
-  {key:'Crusher', label:'Crusher', dimSection:'Crusher', params:['CaO','MgO','Sio2','So3','Sieve Size']},
+  {key:'Crusher', label:'Crusher', dimSection:'Crusher', params:['CaO','MgO','Sio2','So3','Sieve Size','LSF']},
   {key:'Raw Mill', label:'Raw Mill', dimSection:'Raw Mill', params:['Residue % (R+90 μm)','L.S.F %','S.M %','So3']},
   {key:'Kiln Feed', label:'Kiln Feed', dimSection:'Kiln Feed', params:['Residue % (R+90 μm)','L.S.F %','S.M %','So3']},
   {key:'Clinker', label:'Clinker', dimSection:'Kiln', params:['SiO2','Al2O3','Fe2O3','CaO','MgO','SO3','Free Lime','L.S.F %','S.M','C3S %','C2S %','C3A %','C4AF %','Liquid %','Liter Weight (In Gram per litre)',
@@ -3597,6 +3597,7 @@ function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedPara
     <td${tt('Actual Average '+displayName+' over the selected window, from your QMS log-sheet export (real readings) where covered, else left blank.')}><b>${avg!=null?fmt(avg,dec):'&mdash;'}</b>${badge}</td>
     <td class="muted-cell"${tt('Lowest single reading of '+displayName+' in the selected window.')}>${amin!=null?fmt(amin,dec):'&mdash;'}</td>
     <td class="muted-cell"${tt('Highest single reading of '+displayName+' in the selected window.')}>${amax!=null?fmt(amax,dec):'&mdash;'}</td>
+    ${weightInfo?`<td class="muted-cell"${tt('Total Sample Count = valid individual readings of '+displayName+' in the selected dates, using the same section and material filters as Actual. Blank and non-numeric readings are excluded; zero readings are included.'+(real.oorSamples>0 && real.oorSamples!==real.n?' OOR is assessed for '+real.oorSamples+' of '+real.n+' loaded readings.':''))}>${real.n>0?fmt(real.n,0):'&mdash;'}</td>`:''}
     <td class="muted-cell"${tt('OOR (count) = number of individual samples of '+displayName+' in the selected window that fall outside the Min to Max range above'+(real.oorSamples>0?(' -- '+real.oor+' of '+real.oorSamples+' samples.'):' -- not available (no individual samples loaded for this window yet, or no Min/Max registered).'))}>${oorCountHtml}</td>
     <td class="muted-cell"${tt('OOR % = out-of-range samples &divide; all samples of '+displayName+' in the selected window &times; 100.')}>${oorPctHtml}</td>
     ${weightInfo?`<td${tt('Equal parameter weight in this section.')}>${weightInfo.weight===null?'&mdash;':fmt(weightInfo.weight,2)+'%'}</td><td${tt('Weighted OOR contribution in percentage points = parameter OOR % × Weight % ÷ 100.')}>${weightInfo.contribution===null?'&mdash;':fmt(weightInfo.contribution,2)+' pp'}</td>`:''}
@@ -3639,7 +3640,7 @@ function renderQualityTabs(){
         // status reads "No target set"); only collapse to the notice row when there is no data either.
         const probe = realQualityStat(rowDataKey, sourceParam, state.dateFrom, state.dateTo);
         if(probe.covered===0){
-          return `<tr><td class="rowhead">${pName}</td><td colspan="11" class="muted-cell">No target registered in Dim_Parameter yet &mdash; DATA NOT AVAILABLE for this window</td></tr>`;
+          return `<tr><td class="rowhead">${pName}</td><td colspan="12" class="muted-cell">No target registered in Dim_Parameter yet &mdash; DATA NOT AVAILABLE for this window</td></tr>`;
         }
       }
       const dec = qualityDecimals(g.key, pName);
@@ -3658,9 +3659,9 @@ function renderQualityTabs(){
       ${sectionQualitySummaryHtml(sectionSummary)}
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual Avg</th><th>Actual Min</th><th>Actual Max</th><th>OOR (Count)</th><th>OOR %</th><th>Weight %</th><th>Weighted OOR contribution</th><th>Status</th></tr></thead>
+          <thead><tr><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual Avg</th><th>Actual Min</th><th>Actual Max</th><th>Total Sample Count</th><th>OOR (Count)</th><th>OOR %</th><th>Weight %</th><th>Weighted OOR contribution</th><th>Status</th></tr></thead>
           <tbody>${bodyRows}</tbody>
-          <tfoot><tr><td class="rowhead" colspan="8">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
+          <tfoot><tr><td class="rowhead" colspan="9">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
         </table>
       </div>
     </div>`;
