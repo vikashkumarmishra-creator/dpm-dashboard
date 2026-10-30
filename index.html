@@ -549,6 +549,33 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 .cf-additive-panel::before { display:none; }
 .cf-material-heading { text-align:left; color:var(--accent); font-weight:700; }
 .cf-additive-panel .kpi-hover-table td { padding:5px 7px; }
+
+/* Management commentary: evidence, exceptions and proposed checks. */
+.dpm-summary { margin-top:12px; }
+.dpm-summary h3 { margin:16px 0 8px; font-size:14px; }
+.dpm-summary-counts { display:flex; flex-wrap:wrap; gap:10px; margin:12px 0; }
+.dpm-summary-counts > span { padding:9px 12px; border:1px solid var(--border); border-radius:10px; font-size:12px; background:var(--surface-2); }
+.dpm-summary-counts strong { color:var(--accent); font-size:18px; margin-right:5px; }
+.dpm-insight-columns { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:12px 0; }
+.dpm-insight-columns > div { padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); min-width:0; }
+.dpm-insight-columns h3, .dpm-insight-columns h4 { font-size:13px; margin:0 0 8px; color:var(--accent); }
+.dpm-insight-columns p, .dpm-insight-columns li, .dpm-context p, .dpm-context li { font-size:12px; line-height:1.6; margin:6px 0; overflow-wrap:anywhere; }
+.dpm-insight-columns ol { padding-left:18px; margin:0; }
+.dpm-domain-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.dpm-exception-table { width:100%; min-width:880px; }
+.dpm-exception-table th, .dpm-exception-table td { text-align:left; }
+.dpm-exception-table td { white-space:normal; vertical-align:top; font-size:11px; line-height:1.5; min-width:90px; max-width:350px; }
+.dpm-exception-table td:nth-child(5), .dpm-exception-table td:nth-child(6) { min-width:200px; }
+.dpm-exception-table small { color:var(--text-secondary); font-size:10px; }
+.dpm-context { margin:12px 0 0; padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--surface-2); }
+.dpm-context > summary, #dpmMeetingText > summary { cursor:pointer; font-weight:700; font-size:13px; line-height:1.5; }
+.dpm-context > summary span { font-weight:400; font-size:11px; color:var(--text-secondary); margin-left:8px; }
+.dpm-context ul { padding-left:20px; }
+#dpmMeetingText pre { white-space:pre-wrap; font:12px/1.6 inherit; padding:12px; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; }
+.dpm-evidence-note { margin-top:14px; }
+#dpmSummaryActions, #production-section, #quality-section, #energy-section, #reliability-section, #cpp-section { scroll-margin-top:140px; }
+@media(max-width:900px){.dpm-insight-columns{grid-template-columns:1fr;}.dpm-summary .section-head{align-items:flex-start;gap:8px;flex-wrap:wrap;}}
+
 </style>
 </head>
 <body>
@@ -624,6 +651,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
     <section class="section quality-conformance-details" id="qualityCementConformanceDetails" hidden aria-label="Cement Quality Conformance calculation backup"></section>
   </div>
 
+  <section class="section panel panel-pad dpm-summary" id="dpmSummaryActions" aria-label="Summary and Actions"></section>
+
   <!-- PRODUCTION / MTBF TABLE -->
   <div class="section" id="production-section">
     <div class="section-head">
@@ -676,6 +705,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
       </div>
     </details>
   </div>
+
+  <div class="section" id="dpmProductionReadout"></div>
 
   <!-- STOPPAGE BREAKDOWN, THEN MTBF TREND (stacked full-width, in this order) -->
   <div class="section">
@@ -754,7 +785,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
   </div>
 
   <!-- AVAILABILITY -- BY RESPONSIBLE DEPARTMENT -->
-  <div class="section">
+  <div class="section" id="reliability-section">
     <div class="panel panel-pad">
       <div class="section-head" style="margin-bottom:6px;">
         <h2>Reliability &mdash; Section-wise &amp; Department-wise</h2>
@@ -775,6 +806,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
       <div id="availDeptTableBox" style="display:none;" class="table-wrap"><table id="availDeptTable"></table></div>
     </div>
   </div>
+
+  <div class="section" id="dpmReliabilityReadout"></div>
 
   <!-- QUALITY -->
   <div class="section" id="quality-section">
@@ -815,7 +848,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
   </div>
 
   <!-- SPECIFIC POWER -->
-  <div class="section">
+  <div class="section" id="energy-section">
     <div class="panel panel-pad">
       <div class="section-head" style="margin-bottom:6px;">
         <h2>Specific Power by Section</h2>
@@ -831,6 +864,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
       <div id="powerTableBox" style="display:none;" class="table-wrap"><table id="powerTable"></table></div>
     </div>
   </div>
+
+  <div class="section" id="dpmEnergyReadout"></div>
 
   <!-- CPP (own dedicated section, not squeezed into a shared panel) -->
   <div class="section" id="cpp-section">
@@ -851,6 +886,8 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
         &ldquo;LIVE&rdquo; here means real per-day data baked in from your uploaded sheets, same convention as every other card on this dashboard &mdash; not a page that re-fetches Google Sheets on every load. Your CPP Target sheet's published link is on file for reference, but isn't wired into an auto-refresh connection; say so if you actually want that (bigger change, and Google Sheets links have repeatedly failed to fetch server-side in this session, so it would run client-side in your own browser instead).</div>
     </details>
   </div>
+
+  <div class="section" id="dpmCppReadout"></div>
 
   <!-- DATA LINEAGE -->
   <div class="section" id="lineage">
@@ -3692,6 +3729,7 @@ function renderQualityTabs(){
           <tr><td class="rowhead" colspan="9">Overall weighted OOR (equal parameter weights)</td><td>${sectionSummary.weightedOor===null?'N/A':fmt(sectionSummary.weightedOor,2)+'%'}</td><td>${sectionSummary.eligible?'100%':'&mdash;'}</td><td>${sectionSummary.weightedOor===null?'&mdash;':fmt(sectionSummary.weightedOor,2)+' pp'}</td><td>${sectionSummary.oorReady}/${sectionSummary.eligible} available</td></tr></tfoot>
         </table>
       </div>
+      ${renderDpmQualityReadout(g,sectionSummary,state.dateFrom,state.dateTo)}
     </div>`;
   }).join('');
 }
@@ -3782,6 +3820,7 @@ function renderCompressiveStrengthTabs(){
           <tbody>${bodyRows}</tbody>
         </table>
       </div>
+      ${renderDpmStrengthReadout(g,csState.dateFrom,csState.dateTo)}
     </div>`;
   }).join('');
   renderCsChart();
@@ -5302,6 +5341,7 @@ async function doLiveQualityRefresh(){
       if(gotPower) renderPowerChart();
       if(gotAny || targetResult.updated>0 || gotAdditive || gotClinkerActual || gotProd || gotPower || gotTargetProd || gotSpHeatTarget || gotSpHeatActual || Object.keys(specificPowerResult.data).length) renderKPIs();
       if(gotCppActual || gotCppTarget || (targetResult && targetResult.updated>0)) renderCppKpis();
+      renderDpmManagementInsights();
     } else if(status){
       const shown = allErrors.slice(0,8).join('; ') + (allErrors.length>8 ? ` &hellip; (+${allErrors.length-8} more)` : '');
       status.innerHTML = `<span class="chip sample">FAILED</span> ${shown || 'no data returned from your Apps Script endpoint'}. Still showing whatever data is currently loaded (either the snapshot baked in when this file was generated, or the last successful refresh this session).`;
@@ -5325,7 +5365,228 @@ function renderAll(){
   renderCompressiveStrengthTabs();
   renderPowerChart();
   renderCppKpis();
+  renderDpmManagementInsights();
   document.getElementById('genStamp').textContent = 'Rendered ' + new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
+}
+
+/* Date-window management commentary. Uses existing DPM calculations only. */
+const DPM_INSIGHT_DOMAINS=['Production','Energy','Reliability','Quality','CPP'];
+let dpmInsightFilter='All';
+function dpmPreviousWindow(from,to){
+  const n=isoRangeDays(from,to).length,end=new Date(from),start=new Date(from);
+  end.setDate(end.getDate()-1);start.setDate(start.getDate()-n);
+  return {from:start,to:end,n};
+}
+function dpmFinite(v){return typeof v==='number'&&Number.isFinite(v);}
+function dpmText(v,dec=2){return dpmFinite(v)?fmt(v,dec):'N/A';}
+function dpmSectionLabel(s){return s==='Coal Mill'?'Fuel Mill':s==='Packing Plant'?'Dispatch / Packing':s;}
+function dpmSuggestedCheck(domain,area,param){
+  if(domain==='Quality'){
+    if(/lsf|cao|sio2|sm|s\.m|al2|fe2|c3s|c2s|liquid/i.test(param))return 'Review the sample trend, raw-material blend and feeder records with Process/QC; confirm sampling and chemistry before adjusting the mix.';
+    if(/residue|sieve|blaine/i.test(param))return 'Verify sampling and fineness results; review separator, grinding and feed-size records with Process/QC before changing settings.';
+    if(/lime|so3|ash/i.test(param))return 'Review repeat test results alongside fuel, feed chemistry and burning records; verify the cause with Process/QC.';
+    return 'Verify the test, target band and sample trend with QC; review time-aligned operating records before assigning a cause.';
+  }
+  if(domain==='Energy')return 'Review operating rate, throughput, stop-start periods and meter readings; verify the explanation with operating records before assigning a cause.';
+  if(domain==='Reliability')return 'Review recorded breakdown events, repeat equipment failures and RCA/CAPA status; distinguish planned and delayed hours from breakdown hours.';
+  if(domain==='CPP'&&/loi|moisture/i.test(param))return 'Verify coal/ash sampling and test results; review coal quality, fuel-feeder and combustion records with CPP/Process before assigning a cause.';
+  if(domain==='CPP'&&/steam|cycle/i.test(param))return 'Review steam flow, pressure/temperature, turbine load and condenser records on the same dates; check instrument readings before assigning a cause.';
+  if(domain==='CPP')return 'Review generation, auxiliary meters, operating hours and shutdown records on the same dates; validate the balance before assigning a cause.';
+  return 'Review running hours, throughput, planned/delayed stoppages and breakdown records against the production plan.';
+}
+function dpmQualityBreachCounts(key,param,from,to,min,max){
+  let low=0,high=0,n=0;const daily=(REAL_QUALITY[key]||{})[param]||{};
+  isoRangeDays(from,to).forEach(d=>{((daily[d]||{}).vals||[]).forEach(v=>{if(!dpmFinite(v))return;n++;if(v<min)low++;if(v>max)high++;});});
+  return {low,high,n};
+}
+function dpmQualityReview(g,from,to,summary){
+  const previous=dpmPreviousWindow(from,to),model=summary||computeSectionQualitySummary(g,from,to);
+  const rows=model.entries.map(entry=>{
+    const previousStat=realQualityStat(entry.dataKey,entry.param,previous.from,previous.to,entry.eligible?entry.target.Min:null,entry.eligible?entry.target.Max:null);
+    const shape=entry.eligible?dpmQualityBreachCounts(entry.dataKey,entry.param,from,to,entry.target.Min,entry.target.Max):{low:0,high:0,n:0};
+    const averageOutside=entry.eligible&&entry.stat.avg!==null&&(entry.stat.avg<entry.target.Min||entry.stat.avg>entry.target.Max);
+    const comparable=entry.eligible&&entry.stat.full&&previousStat.full&&entry.stat.oorSamples===entry.stat.n&&previousStat.oorSamples===previousStat.n&&entry.stat.oorPct!==null&&previousStat.oorPct!==null;
+    return {...entry,previousStat,shape,averageOutside,changePp:comparable?entry.stat.oorPct-previousStat.oorPct:null,
+      action:dpmSuggestedCheck('Quality',g.label,entry.name)};
+  });
+  return {group:g.key,label:g.label,rows,summary:model,previous};
+}
+function buildDpmInsightModel(from,to){
+  const previous=dpmPreviousWindow(from,to),metrics=[],exceptions=[],gaps=[],notes=[];
+  const addGap=(domain,area,message)=>gaps.push({domain,area,message});
+  function addMetric(record){
+    const r={...record};r.hasActual=dpmFinite(r.actual);r.hasTarget=dpmFinite(r.target)&&(r.unit==='%'?r.target>=0:r.target>0);
+    r.assessed=r.hasActual&&r.hasTarget&&r.full===true;
+    r.adverse=r.assessed&&(r.lower?r.actual>r.target:r.actual<r.target);
+    r.gap=r.assessed?r.actual-r.target:null;
+    r.change=r.hasActual&&dpmFinite(r.previous)&&r.previousFull&&r.full?r.actual-r.previous:null;
+    r.changeUnit=r.unit==='%'?'pp':r.unit;
+    r.relativeGap=r.adverse?Math.abs(r.gap)/(Math.abs(r.target)||1):0;
+    r.action=r.action||dpmSuggestedCheck(r.domain,r.area,r.metric);
+    r.state=r.adverse?'Target gap':r.assessed?'At / better than target':!r.hasActual?'Data required':!r.hasTarget?'Target required':'Partial coverage';
+    metrics.push(r);if(r.adverse)exceptions.push({...r,kind:'target',status:'Target gap'});
+    if(!r.assessed)addGap(r.domain,r.area,r.metric+': '+(r.reason||r.state)+'.');
+    return r;
+  }
+  const raw={},old={};
+  SECTION_ORDER.filter(s=>!s.computed).forEach(s=>{raw[s.key]=computeSectionRow(s.key,from,to);old[s.key]=computeSectionRow(s.key,previous.from,previous.to);});
+  const combined=mergeCementMillRow(raw['Cement Mill PPC'],raw['Cement Mill OPC']),oldCombined=mergeCementMillRow(old['Cement Mill PPC'],old['Cement Mill OPC']);
+  const physical=['Additive Crusher','Crusher','Raw Mill','Coal Mill','Kiln','Cement Mill','Packing Plant'];
+  const get=(s,past=false)=>s==='Cement Mill'?(past?oldCombined:combined):(past?old[s]:raw[s]);
+  const sectionRows=physical.map(section=>({section,row:get(section),previous:get(section,true)}));
+  const production=sectionRows.concat(['Cement Mill PPC','Cement Mill OPC'].map(section=>({section,row:raw[section],previous:old[section]})));
+  production.forEach(({section,row:r,previous:p})=>{
+    addMetric({id:'production:'+section,domain:'Production',area:dpmSectionLabel(section),metric:'Production',actual:r.actualProd,target:r.targetProd,unit:'MT',lower:false,
+      full:r.actualCoverage==='full'&&r.targetCoverage==='full',previous:p.actualProd,previousFull:p.actualCoverage==='full',
+      evidence:'Actual production '+r.actualCoveredDays+'/'+r.actualTotalDays+' days; target '+r.targetCoveredDays+'/'+r.targetTotalDays+' days. Running hours '+dpmText(r.actualRunHours,1)+'.',
+      reason:r.targetCoverage!=='full'?'production target is unconfirmed or incomplete':r.actualCoverage!=='full'?'production source does not cover the complete window':null});
+  });
+  sectionRows.forEach(({section,row:r,previous:p})=>{
+    const area=dpmSectionLabel(section),stop=realStoppageSum(section==='Cement Mill'?'Cement Mill PPC':section,from,to);
+    const previousStop=realStoppageSum(section==='Cement Mill'?'Cement Mill PPC':section,previous.from,previous.to);
+    const previousPlanned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n)-previousStop.plannedHrs-previousStop.delayedHrs;
+    const planned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n)-stop.plannedHrs-stop.delayedHrs;
+    addMetric({id:'availability:'+section,domain:'Production',area,metric:'Availability',actual:planned>0?r.avail:null,target:95,unit:'%',lower:false,
+      full:r.availUtilCoverage==='full',previous:p.avail,previousFull:p.availUtilCoverage==='full'&&previousPlanned>0,
+      evidence:'Planned-hours basis; excludes planned and delayed stoppages. Running-hour utilisation '+dpmText(r.util,1)+'%.',
+      reason:planned<=0?'no positive planned-hour denominator':r.availUtilCoverage!=='full'?'running-hour / stoppage coverage is incomplete':null});
+    if(r.actualProd>0){
+      addMetric({id:'energy:'+section,domain:'Energy',area,metric:'Specific power',actual:r.actualPower,target:r.targetPower,unit:'kWh/MT',lower:true,
+        full:r.actualCoverage==='full'&&r.powerCoverage==='full'&&r.targetCoverage==='full',previous:p.actualPower,previousFull:p.actualCoverage==='full'&&p.powerCoverage==='full',
+        evidence:'Same section-meter kWh / production as the section table. Power '+r.powerCoveredDays+'/'+r.powerTotalDays+' days; target '+r.targetCoveredDays+'/'+r.targetTotalDays+' days.'});
+    }else if(r.actualProd===0)notes.push({domain:'Energy',area,text:'Zero production: specific power is not ranked as an efficiency result.'});
+    else addGap('Energy',area,'Specific power cannot be assessed without positive covered production.');
+    const rel=reliabilityResult(section,from,to),preRel=reliabilityResult(section,previous.from,previous.to);
+    addMetric({id:'reliability:'+section,domain:'Reliability',area,metric:'Reliability',actual:rel.value,target:95,unit:'%',lower:false,
+      full:rel.full,previous:preRel.value,previousFull:preRel.full,
+      evidence:'Running '+dpmText(rel.run,2)+' h; breakdown '+dpmText(rel.breakdown,2)+' h; paired coverage '+rel.covered+'/'+rel.total+' days. Target 95%.',
+      reason:rel.value===null?'no covered positive running + breakdown denominator':!rel.full?'paired running / breakdown coverage is incomplete':null});
+    if(r.bdCount>0){
+      const mtbfTarget=realMtbfLatest(section==='Cement Mill'?'Cement Mill PPC':section).target;
+      addMetric({id:'mtbf:'+section,domain:'Reliability',area,metric:'MTBF',actual:r.mtbfActual,target:mtbfTarget,unit:'h',lower:false,
+        full:r.mtbfCoverage==='full',previous:p.bdCount>0?p.mtbfActual:null,previousFull:p.mtbfCoverage==='full'&&p.bdCount>0,
+        evidence:dpmText(r.bdCount,0)+' qualifying breakdowns; MTTR '+dpmText(r.mttr,2)+' h. No MTTR target is invented.'});
+    }else if(r.bdCount===0)notes.push({domain:'Reliability',area,text:'No qualifying breakdown events. The displayed run-hour MTBF proxy is not treated as a target failure.'});
+  });
+  const consumption=computeConsumptionPowerWindow(from,to),consumptionTarget=computeConsumptionTargetWindow(from,to,consumption);
+  const preConsumption=computeConsumptionPowerWindow(previous.from,previous.to);
+  ['clinker','cement'].forEach(metric=>{
+    const rateComplete=!consumption.rateCoverage.some(r=>r.partial||r.covered!==r.total);
+    const preComplete=!preConsumption.rateCoverage.some(r=>r.partial||r.covered!==r.total);
+    addMetric({id:'till:'+metric,domain:'Energy',area:metric==='clinker'?'Till Clinkerization':'Till Cement',metric:'Consumption-based specific power',
+      actual:consumption[metric+'Specific'],target:consumptionTarget[metric+'Specific'],unit:'kWh/MT',lower:true,
+      full:rateComplete&&['Additive Crusher','Crusher','Raw Mill','Coal Mill','Kiln','Cement Mill PPC','Cement Mill OPC'].every(s=>raw[s].targetCoverage==='full'),
+      previous:preConsumption[metric+'Specific'],previousFull:preComplete,
+      evidence:'Exact existing card calculation; 4% return-dust deduction and zero-production rules retained. '+(consumption.rateCoverageLabel||'Material-rate coverage complete.'),
+      reason:!rateComplete?'material-rate history is partial; result is shown on the card but is not ranked as a full-window gap':null});
+  });
+  const heat=realKilnSpHeatActual(from,to),heatTarget=realKilnSpHeatTarget(from,to),oldHeat=realKilnSpHeatActual(previous.from,previous.to);
+  addMetric({id:'heat',domain:'Energy',area:'Kiln',metric:'Specific heat',actual:heat.value,target:heatTarget.value,unit:'kcal/kg',lower:true,
+    full:heat.full&&heatTarget.full&&heat.n===previous.n&&heatTarget.n===previous.n,previous:oldHeat.value,previousFull:oldHeat.full&&oldHeat.n===previous.n,
+    evidence:'Same reading-weighted actual and date-window target as the Kiln Specific Heat card. Actual readings on '+heat.n+'/'+heat.total+' days.'});
+  const quality=QUALITY_GROUPS.map(g=>dpmQualityReview(g,from,to));
+  quality.forEach(group=>group.rows.forEach(row=>{
+    const r=row.stat,limits=row.eligible?dpmText(row.target.Min,3)+'–'+dpmText(row.target.Max,3):'No approved band';
+    if(!row.eligible)addGap('Quality',group.label,row.name+': no complete registered target / Min–Max band; excluded from compliance judgement.');
+    else if(r.n===0)addGap('Quality',group.label,row.name+': no real readings in the selected dates.');
+    else{
+      if(r.oorSamples!==r.n)addGap('Quality',group.label,row.name+': sample-level OOR coverage '+r.oorSamples+'/'+r.n+' readings.');
+      if(!r.full)addGap('Quality',group.label,row.name+': observations cover '+r.covered+'/'+r.total+' selected days.');
+      if(row.averageOutside||(r.oor!==null&&r.oor>0))exceptions.push({id:'quality:'+group.group+':'+row.param,domain:'Quality',area:group.label,metric:row.name,
+        actual:r.avg,target:null,range:limits,unit:row.target.Unit||'',kind:'quality',status:row.averageOutside?'Average outside limits':'Sample excursions',
+        gap:null,relativeGap:(r.oorPct||0)/100,full:r.full,change:row.changePp,changeUnit:'pp OOR',lower:true,
+        evidence:dpmText(r.oor,0)+' / '+r.n+' sample-parameter results OOR ('+dpmText(r.oorPct,1)+'%); '+row.shape.low+' below / '+row.shape.high+' above. Coverage '+r.covered+'/'+r.total+' days.',
+        action:row.action});
+    }
+  }));
+  const cppSpecs=[['Power Generation (MW)',false,1000,'kWh'],['Export to Cement (MW)',false,1000,'kWh'],['Auxiliary Con (%)',true,1,'%'],['PLF (%)',false,1,'%'],['TG Cycle Efficiency (Kcal/Kwh)',true,1,'kcal/kWh'],['Sp.Steam cons.(Ton/MW)',true,1,'t/MWh'],['LOI (%)',true,1,'%'],[CPP_MOIST_COL,true,1,'%']];
+  cppSpecs.forEach(([col,lower,mult,unit])=>{
+    const a=realCppValue(col,from,to),p=realCppValue(col,previous.from,previous.to),dim=CPP_DIM_TARGET_MAP[col];
+    const dt=dim&&REAL_CPP_TARGET[col]==null?cppDimLookup(dim.param):null;
+    const target=REAL_CPP_TARGET[col]!=null?realCppTargetValue(col,from,to):dt&&dt.live?{value:dt.target,n:previous.n,full:true}:null;
+    addMetric({id:'cpp:'+col,domain:'CPP',area:'CPP',metric:REAL_CPP_LABEL[col]||col,actual:a.value===null?null:a.value*mult,target:target&&target.value!==null?target.value*mult:null,unit,lower,
+      full:a.n===previous.n&&!!target&&target.n===previous.n,previous:p.value===null?null:p.value*mult,previousFull:p.n===previous.n,
+      evidence:'Actual '+a.n+'/'+a.total+' days; target '+(target?target.n:0)+'/'+a.total+' days. '+(mult===1000?'Energy converted to kWh on the existing Power Balance basis.':'Same aggregate as the CPP cards.'),
+      reason:!target?'no live approved target mapped':a.n!==previous.n||target.n!==previous.n?'actual / target reading dates are incomplete':null});
+  });
+  const powerBalance=computeTopPowerCards(from,to),loss=powerBalance.find(r=>r.label==='Transformer Loss %');
+  if(loss&&loss.value!==null)notes.push({domain:'CPP',area:'Power balance',text:'Transformer balance difference '+dpmText(loss.value,2)+'% on '+loss.n+'/'+loss.total+' days. No approved loss target is mapped; verify meter/time alignment without assigning a loss cause.'});
+  const generation=computeGenerationCheck(from,to);
+  if(generation.mrss!==null)notes.push({domain:'CPP',area:'Generation Check',text:'MRSS sum '+dpmText(generation.mrss,3)+'; auxiliary difference sum '+dpmText(generation.difference,3)+' ('+dpmText(generation.percent,2)+'%). '+generation.paired+' matched readings; no approved target is applied.'});
+  if(RELIABILITY_DEPT_AVAILABLE)MTBF_DEPT_LIST.forEach(dept=>{
+    const a=reliabilityResult('__PLANT__',from,to,dept),p=reliabilityResult('__PLANT__',previous.from,previous.to,dept);
+    addMetric({id:'dept:'+dept,domain:'Reliability',area:dept+' department',metric:'Plant reliability',actual:a.value,target:95,unit:'%',lower:false,full:a.full,previous:p.value,previousFull:p.full,
+      evidence:'Department-attributed breakdown '+dpmText(a.breakdown,2)+' h against the same physical-section running hours; target 95%.'});
+  });
+  const uniqueGaps=[...new Map(gaps.map(g=>[g.domain+'|'+g.area+'|'+g.message,g])).values()];
+  exceptions.sort((a,b)=>DPM_INSIGHT_DOMAINS.indexOf(a.domain)-DPM_INSIGHT_DOMAINS.indexOf(b.domain)||Number(b.status==='Average outside limits')-Number(a.status==='Average outside limits')||b.relativeGap-a.relativeGap);
+  const priorities=DPM_INSIGHT_DOMAINS.map(domain=>exceptions.find(e=>e.domain===domain)).filter(Boolean);
+  const linked=sectionRows.map(({section,row})=>{
+    const area=dpmSectionLabel(section),issues=exceptions.filter(e=>e.area===area&&e.full&&e.domain!=='Quality');
+    const distinct=[...new Set(issues.map(e=>e.domain))];
+    return distinct.length>=2?{area,text:issues.slice(0,3).map(e=>e.metric+' '+dpmText(e.actual,2)+' '+e.unit).join('; ')+'. These gaps occur in the same selected window; check time-aligned records before linking causes.'}:null;
+  }).filter(Boolean);
+  const clinkerConformance=computeQualityConformance(from,to),cementConformance=computeQualityConformance(from,to,'cement');
+  return {from,to,previous,metrics,exceptions,gaps:uniqueGaps,notes,quality,priorities,linked,sectionRows,clinkerConformance,cementConformance};
+}
+function dpmTrendText(r){
+  if(!dpmFinite(r.change))return 'Previous-window comparison unavailable / incomplete';
+  const better=r.lower?r.change<0:r.change>0;
+  return (r.change===0?'Unchanged':better?'Improved':'Deteriorated')+' '+dpmText(Math.abs(r.change),2)+' '+r.changeUnit+' vs previous window';
+}
+function dpmExceptionTable(rows){
+  if(!rows.length)return '<p class="hint">No target / sample exceptions identified among the available assessed results. Check data coverage below before concluding that the whole window is within target.</p>';
+  return '<div class="table-wrap"><table class="dpm-exception-table"><thead><tr><th>Status</th><th>Area</th><th>Metric</th><th>Actual / comparator</th><th>Evidence &amp; insight</th><th>Action focus</th></tr></thead><tbody>'+rows.map(r=>`<tr><td><span class="status-chip ${r.status==='Sample excursions'?'watch':'critical'}">${escAttr(r.status)}</span></td><td>${escAttr(r.area)}</td><td>${escAttr(r.metric)}</td><td>${dpmText(r.actual,3)} ${escAttr(r.unit)}<br><small>${r.range?'Band '+escAttr(r.range):'Target '+dpmText(r.target,3)+' '+escAttr(r.unit)}</small></td><td>${escAttr(r.evidence)}<br><small>${escAttr(dpmTrendText(r))}</small></td><td>${escAttr(r.action)}</td></tr>`).join('')+'</tbody></table></div>';
+}
+function dpmContextHtml(domain,model){
+  const rows=model.exceptions.filter(r=>r.domain===domain),facts=model.metrics.filter(r=>r.domain===domain),gaps=model.gaps.filter(r=>r.domain===domain),notes=model.notes.filter(r=>r.domain===domain);
+  const observed=facts.filter(r=>r.hasActual).length,assessed=facts.filter(r=>r.assessed).length;
+  const lead=rows[0],trend=facts.filter(r=>dpmFinite(r.change)&&r.change!==0).sort((a,b)=>Math.abs(b.change/(Math.abs(b.previous)||1))-Math.abs(a.change/(Math.abs(a.previous)||1))).slice(0,2);
+  return `<details class="dpm-context"><summary>${domain} — Exceptions, Insights &amp; Action Focus <span>${rows.length} exception(s) · ${assessed} metrics assessed</span></summary>
+    <div class="dpm-insight-columns"><div><h4>Observation</h4><p>${observed} metric(s) have observations; ${assessed} have complete comparable actual and target coverage.</p>${notes.slice(0,3).map(n=>'<p>'+escAttr(n.area+': '+n.text)+'</p>').join('')}</div>
+    <div><h4>Insight</h4><p>${lead?escAttr(lead.area+' — '+lead.metric+': '+lead.evidence):'No quantified exception identified from the assessed results.'}</p>${trend.map(r=>'<p>'+escAttr(r.area+' / '+r.metric+': '+dpmTrendText(r))+'</p>').join('')}</div>
+    <div><h4>Action focus</h4><p>${lead?escAttr(lead.action):gaps.length?'Complete missing source/target coverage before reviewing performance.':'Continue monitoring the available measured results.'}</p><a href="#${domain==='Production'?'production-section':domain==='Energy'?'energy-section':domain==='Reliability'?'reliability-section':domain==='CPP'?'cpp-section':'quality-section'}">Open supporting dashboard section</a></div></div>
+    ${dpmExceptionTable(rows)}${gaps.length?'<details><summary>Data / target gaps ('+gaps.length+')</summary><ul>'+gaps.map(g=>'<li>'+escAttr(g.area+': '+g.message)+'</li>').join('')+'</ul></details>':''}</details>`;
+}
+function renderDpmQualityReadout(g,summary,from,to){
+  const review=dpmQualityReview(g,from,to,summary),rows=review.rows,ranked=rows.filter(r=>r.eligible&&r.stat.n>0&&(r.averageOutside||r.stat.oor>0)).sort((a,b)=>Number(b.averageOutside)-Number(a.averageOutside)||(b.stat.oorPct||0)-(a.stat.oorPct||0));
+  const observations=rows.filter(r=>r.stat.n>0),missing=rows.filter(r=>!r.eligible||!r.stat.n);
+  return `<details class="dpm-context dpm-quality-readout"><summary>Summary &amp; Actions — ${escAttr(g.label)}</summary>
+    <p class="hint">${toISO(from)} to ${toISO(to)} · previous equal-length window ${toISO(review.previous.from)} to ${toISO(review.previous.to)}. Current approved limits are applied to both windows.</p>
+    <div class="dpm-insight-columns"><div><h4>Observation</h4><p>${dpmText(summary.sampleTotal,0)} parameter readings; ${dpmText(summary.oorTotal,0)} OOR. ${observations.length}/${rows.length} parameters have readings. Equal-weight OOR ${dpmText(summary.weightedOor,2)}%.</p><p>${summary.within}/${summary.judged} parameter averages are within limits; this differs from sample-level OOR.</p></div>
+    <div><h4>Finding</h4>${ranked.length?ranked.slice(0,3).map(r=>'<p><strong>'+escAttr(r.name)+'</strong>: '+dpmText(r.stat.oor,0)+'/'+r.stat.n+' OOR ('+dpmText(r.stat.oorPct,1)+'%); '+r.shape.low+' low / '+r.shape.high+' high; average '+dpmText(r.stat.avg,3)+'. '+(r.changePp===null?'Previous comparable sample coverage unavailable.':(r.changePp>0?'Worse':r.changePp<0?'Better':'Unchanged')+' OOR by '+dpmText(Math.abs(r.changePp),2)+' pp.')+'</p>').join(''):'<p>No out-of-limit observations found among the assessed samples.</p>'}</div>
+    <div><h4>Advice / suggested checks</h4>${ranked.length?ranked.slice(0,2).map(r=>'<p>'+escAttr(r.name+': '+r.action)+'</p>').join(''):'<p>Continue the sampling plan and review trend stability.</p>'}${missing.length?'<p>Data / limits required for '+escAttr(missing.map(r=>r.name).join(', '))+'. Missing results are not passes.</p>':''}</div></div></details>`;
+}
+function renderDpmStrengthReadout(g,from,to){
+  const entries=CS_PARAMS.map(param=>{const target=g.cementType?CEMENT_PARAM_LOOKUP[paramKey(g.cementType,param)]:(PARAM_LOOKUP[paramKey(g.dataKey,param)]||CEMENT_PARAM_LOOKUP[paramKey(g.dataKey,param)]);const eligible=qualityHasLimits(target);return {name:param,param,dataKey:g.dataKey,target,eligible,stat:realQualityStat(g.dataKey,param,from,to,eligible?target.Min:null,eligible?target.Max:null)};});
+  const eligible=entries.filter(r=>r.eligible),judged=entries.filter(r=>r.eligible&&r.stat.n>0),ready=eligible.filter(r=>r.stat.oorPct!==null&&r.stat.oorSamples===r.stat.n);
+  const model={entries,eligible:eligible.length,judged:judged.length,within:judged.filter(r=>r.stat.avg>=r.target.Min&&r.stat.avg<=r.target.Max).length,
+    weightedOor:eligible.length&&ready.length===eligible.length?ready.reduce((s,r)=>s+r.stat.oorPct,0)/eligible.length:null,...qualitySampleTotals(entries)};
+  return renderDpmQualityReadout({key:g.key,label:g.label},model,from,to)+'<p class="hint">Strength commentary follows this section’s own sample-date window. Check test age and result availability before treating missing 7/28-day results as non-conformance.</p>';
+}
+function renderDpmManagementInsights(){
+  const host=document.getElementById('dpmSummaryActions');if(!host)return;
+  const m=buildDpmInsightModel(state.dateFrom,state.dateTo),e=escAttr;
+  const selected=dpmInsightFilter==='All'?m.exceptions:m.exceptions.filter(r=>r.domain===dpmInsightFilter);
+  const assessed=m.metrics.filter(r=>r.assessed),passing=assessed.filter(r=>!r.adverse);
+  const production=m.metrics.filter(r=>['production:Kiln','production:Cement Mill'].includes(r.id));
+  const trend=m.metrics.filter(r=>r.change!==null&&r.change!==0).sort((a,b)=>Math.abs(b.change/(Math.abs(b.previous)||1))-Math.abs(a.change/(Math.abs(a.previous)||1))).slice(0,3);
+  const qualityText='Till Clinker '+dpmText(m.clinkerConformance.value,1)+'% ('+m.clinkerConformance.within+'/'+m.clinkerConformance.judged+'); Cement '+dpmText(m.cementConformance.value,1)+'% ('+m.cementConformance.within+'/'+m.cementConformance.judged+'). These cards assess parameter averages.';
+  host.innerHTML=`<div class="section-head"><h2>Summary &amp; Actions</h2><button class="preset-btn" id="dpmCopySummary">Copy meeting summary</button></div>
+    <p class="hint">${toISO(m.from)} to ${toISO(m.to)} (${m.previous.n} days) · previous equal-length window ${toISO(m.previous.from)} to ${toISO(m.previous.to)}. Based on currently loaded DPM data; refresh for the latest readings.</p>
+    <div class="dpm-summary-counts"><span><strong>${m.exceptions.length}</strong> quantified exceptions</span><span><strong>${assessed.length}</strong> complete target comparisons</span><span><strong>${m.gaps.length}</strong> data / target gaps</span></div>
+    <div class="dpm-insight-columns"><div><h3>Executive summary</h3>${production.map(r=>'<p><strong>'+e(r.area)+'</strong>: '+dpmText(r.actual,0)+' MT vs '+dpmText(r.target,0)+' MT target'+(r.assessed?' ('+dpmText(r.actual-r.target,0)+' MT; '+dpmText(r.actual/r.target*100,1)+'% achievement).':'. Coverage incomplete — no whole-window shortfall is asserted.')+'</p>').join('')}<p>${e(qualityText)}</p><p>${passing.length}/${assessed.length} complete metric comparisons are at or better than target. Unassessed results are excluded.</p></div>
+    <div><h3>Insights / trend watch</h3>${trend.length?trend.map(r=>'<p><strong>'+e(r.area+' / '+r.metric)+'</strong>: '+e(dpmTrendText(r))+'.</p>').join(''):'<p>Comparable previous-window coverage is unavailable. No improvement or deterioration is inferred.</p>'}<p>Quality findings below use sample OOR evidence, separately from the conformance cards’ average-based verdict.</p></div>
+    <div><h3>Action focus</h3>${m.priorities.length?'<ol>'+m.priorities.map(r=>'<li><strong>'+e(r.area+' — '+r.metric)+'</strong><br>'+e(r.action)+'</li>').join('')+'</ol>':'<p>No quantified gap to prioritize from available assessed results. Complete missing sources and targets before concluding that the plant is within target.</p>'}</div></div>
+    <div class="dpm-domain-tabs" role="group" aria-label="Exception area">${['All',...DPM_INSIGHT_DOMAINS].map(d=>'<button class="preset-btn '+(d===dpmInsightFilter?'active':'')+'" data-dpm-domain="'+d+'">'+d+'</button>').join('')}</div>
+    <h3>Exceptions — ${e(dpmInsightFilter==='All'?'all areas':dpmInsightFilter)}</h3>${dpmExceptionTable(selected.slice(0,10))}${selected.length>10?'<details><summary>Show remaining '+(selected.length-10)+' exceptions</summary>'+dpmExceptionTable(selected.slice(10))+'</details>':''}
+    ${m.linked.length?'<details class="dpm-context"><summary>Linked signals — checks requiring verification</summary>'+m.linked.map(r=>'<p><strong>'+e(r.area)+'</strong>: '+e(r.text)+'</p>').join('')+'</details>':''}
+    <details class="dpm-context"><summary>Data / target exceptions (${m.gaps.length})</summary>${m.gaps.length?'<ul>'+m.gaps.map(g=>'<li><strong>'+e(g.domain+' / '+g.area)+'</strong>: '+e(g.message)+'</li>').join('')+'</ul>':'<p>No coverage / target exception was identified in the reviewed metrics.</p>'}</details>
+    <p class="hint dpm-evidence-note">Quantified observations and suggested checks; no cause, financial loss, assigned owner or completed action is inferred. Physical Cement Mill energy/reliability is counted once; PPC/OPC production and quality remain separate. Breakdown hours can overlap across sections. Previous quality comparisons use the currently approved limits.</p>
+    <details id="dpmMeetingText"><summary>Plain-text meeting summary</summary><pre>${e('DPM '+toISO(m.from)+' to '+toISO(m.to)+'\n'+production.map(r=>r.area+': '+dpmText(r.actual,0)+' MT vs '+dpmText(r.target,0)+' MT target'+(!r.assessed?' (partial / unavailable coverage)':'')).join('\n')+'\n'+qualityText+'\n'+m.priorities.map((r,i)=>(i+1)+'. '+r.area+' / '+r.metric+': '+r.evidence+' Check: '+r.action).join('\n')+'\nData / target gaps: '+m.gaps.length+'. Suggested checks are not confirmed causes.')}</pre></details>`;
+  host.querySelectorAll('[data-dpm-domain]').forEach(button=>button.addEventListener('click',()=>{dpmInsightFilter=button.dataset.dpmDomain;renderDpmManagementInsights();}));
+  const copy=document.getElementById('dpmCopySummary');if(copy)copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(host.querySelector('#dpmMeetingText pre').textContent);copy.textContent='Copied';}catch{const detail=document.getElementById('dpmMeetingText');if(detail)detail.open=true;copy.textContent='Select the summary text below';}});
+  [['Production','dpmProductionReadout'],['Energy','dpmEnergyReadout'],['Reliability','dpmReliabilityReadout'],['CPP','dpmCppReadout']].forEach(([domain,id])=>{const node=document.getElementById(id);if(node)node.innerHTML=dpmContextHtml(domain,m);});
 }
 
 /* ============================= Wiring ============================= */
