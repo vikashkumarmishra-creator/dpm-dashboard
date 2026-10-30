@@ -519,6 +519,7 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 .quality-audit-card:focus-visible { outline:3px solid var(--series-1); outline-offset:3px; }
 .quality-audit-card[aria-expanded="true"] { border-color:var(--series-1); }
 #qualityPanels tfoot td.rowhead, .quality-conformance-details tfoot td.rowhead { display:table-cell; }
+#qualityPanels tfoot td:not([colspan]), .quality-conformance-details tfoot td:not([colspan]) { text-align:right; font-variant-numeric:tabular-nums; }
 .quality-conformance-details[hidden] { display:none !important; }
 .quality-conformance-details { margin-top:16px; }
 .quality-section-summary { display:flex; flex-wrap:wrap; align-items:center; gap:10px 24px; padding:12px 16px; margin:8px 0 10px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface-2); color:var(--text-secondary); font-size:13px; }
@@ -1936,7 +1937,7 @@ function renderQualityConformanceDetails(model){
 function sectionQualitySummaryHtml(model){
   return `<div class="quality-section-summary"><strong>Overall weighted OOR: ${model.weightedOor===null?'N/A':fmt(model.weightedOor,2)+'%'}</strong>
     <span>Equal weight: ${model.weight===null?'N/A':fmt(model.weight,2)+'%'} per parameter</span><span>OOR data: ${model.oorReady}/${model.eligible} parameters</span><span>Actual averages within spec: ${model.within}/${model.judged}</span></div>
-    <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed.</p>`;
+    <p class="hint">Weighted OOR = Σ(parameter OOR % × parameter weight ÷ 100). Only parameters with registered targets and valid Min–Max limits receive weight. Missing sample-level data keeps the overall OOR unavailable; weights are not redistributed. <strong>pp means percentage points</strong> contributed to the overall OOR percentage.</p>`;
 }
 
 let GENERATION_CHECK_ROWS=[];
@@ -3626,7 +3627,7 @@ function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedPara
     ${weightInfo?`<td class="muted-cell"${tt('Total Sample Count = valid individual readings of '+displayName+' in the selected dates, using the same section and material filters as Actual. Blank and non-numeric readings are excluded; zero readings are included.'+(real.oorSamples>0 && real.oorSamples!==real.n?' OOR is assessed for '+real.oorSamples+' of '+real.n+' loaded readings.':''))}>${real.n>0?fmt(real.n,0):'&mdash;'}</td>`:''}
     <td class="muted-cell"${tt('OOR (count) = number of individual samples of '+displayName+' in the selected window that fall outside the Min to Max range above'+(real.oorSamples>0?(' -- '+real.oor+' of '+real.oorSamples+' samples.'):' -- not available (no individual samples loaded for this window yet, or no Min/Max registered).'))}>${oorCountHtml}</td>
     <td class="muted-cell"${tt('OOR % = out-of-range samples &divide; all samples of '+displayName+' in the selected window &times; 100.')}>${oorPctHtml}</td>
-    ${weightInfo?`<td${tt('Equal parameter weight in this section.')}>${weightInfo.weight===null?'&mdash;':fmt(weightInfo.weight,2)+'%'}</td><td${tt('Weighted OOR contribution in percentage points = parameter OOR % × Weight % ÷ 100.')}>${weightInfo.contribution===null?'&mdash;':fmt(weightInfo.contribution,2)+' pp'}</td>`:''}
+    ${weightInfo?`<td${tt('Equal parameter weight in this section.')}>${weightInfo.weight===null?'&mdash;':fmt(weightInfo.weight,2)+'%'}</td><td${tt('pp means percentage points. Weighted OOR contribution = parameter OOR % × Weight % ÷ 100. For example, 37.5% OOR with one-sixth weight contributes 6.25 pp.')}>${weightInfo.contribution===null?'&mdash;':fmt(weightInfo.contribution,2)+' pp'}</td>`:''}
     <td${tt('Whether the Actual Average falls within the Min/Max spec range above.')}>${statusHtml}</td>
   </tr>`;
   return {html, coverage};
