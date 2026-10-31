@@ -5575,6 +5575,10 @@ function dpmParetoFocus(m){
   function bucket(name,unit,items){
     items=items.filter(r=>dpmFinite(r.impact)&&r.impact>0).sort((a,b)=>b.impact-a.impact||a.area.localeCompare(b.area));
     const total=items.reduce((s,r)=>s+r.impact,0);let cumulative=0;
+    if(items.length&&items.every(r=>r.id&&r.id.startsWith('production:'))){
+      items.forEach(r=>{r.shortfallPct=r.impact/r.target*100;r.share=null;r.bucket=name;r.impactUnit=unit;});
+      buckets.push({name,unit,total,items,kind:'production',needed80:null});return;
+    }
     items.forEach((r,i)=>{r.share=r.impact/total*100;r.before=cumulative;cumulative+=r.share;r.cumulative=cumulative;r.bucket=name;r.impactUnit=unit;r.rank=i+1;});
     if(items.length)buckets.push({name,unit,total,items,needed80:items.filter(r=>r.before<80-1e-8).length});
   }
@@ -5606,6 +5610,7 @@ function dpmParetoFocus(m){
   return {focus,buckets,cap};
 }
 function dpmFocusEvidence(r){
+  if(r.id&&r.id.startsWith('production:'))return dpmText(r.impact,1)+' MT below target ('+dpmText(r.shortfallPct,1)+'% shortfall). Actual '+dpmText(r.actual,1)+' MT; target '+dpmText(r.target,1)+' MT.';
   return r.impact===null?r.evidence:dpmText(r.impact,r.impactUnit==='pp'?2:1)+' '+r.impactUnit+' · '+dpmText(r.share,1)+'% of '+r.bucket.toLowerCase()+'.';
 }
 function renderDpmManagementInsights(){
@@ -5620,7 +5625,7 @@ function renderDpmManagementInsights(){
     <div class="dpm-insight-columns">${p.focus.length?p.focus.map((r,i)=>`<div><h3>${i+1}. ${e(r.area)} — ${e(r.metric)}</h3><p><strong>${e(dpmFocusEvidence(r))}</strong></p><p>${e(r.action)}</p>${r.related.map(x=>'<p class="hint">Related: '+e(x.metric+' — '+dpmFocusEvidence(x))+'</p>').join('')}</div>`).join(''):'<p>No measured priority can be established. Review source coverage before drawing a conclusion.</p>'}</div>
     <details class="dpm-context"><summary>Why these priorities? Impact contribution / 80% coverage</summary>
     <p class="hint">Largest comparable contributors first; maximum three areas in the meeting focus. Review order: final-product output, excess section electricity, recorded breakdown hours, quality and CPP. Related checks for one area are combined. Tonnes, kWh, hours and OOR are kept separate; these are potential checks, not proven recoverable losses.</p>
-    ${p.buckets.map(b=>'<p><strong>'+e(b.name)+'</strong>: '+b.needed80+'/'+b.items.length+' contributors cover at least 80% of '+dpmText(b.total,2)+' '+e(b.unit)+'.</p><ul>'+b.items.filter(r=>r.before<80-1e-8).map(r=>'<li>'+e(r.area+' / '+r.metric)+': '+dpmText(r.impact,2)+' '+e(b.unit)+' ('+dpmText(r.share,1)+'%; cumulative '+dpmText(r.cumulative,1)+'%)</li>').join('')+'</ul>').join('')}
+    ${p.buckets.map(b=>b.kind==='production'?'<p><strong>'+e(b.name)+'</strong>: '+e(dpmFocusEvidence(b.items[0]))+' Shortfall % = (Target − Actual) ÷ Target × 100.</p>':'<p><strong>'+e(b.name)+'</strong>: '+b.needed80+'/'+b.items.length+' contributors cover at least 80% of '+dpmText(b.total,2)+' '+e(b.unit)+'.</p><ul>'+b.items.filter(r=>r.before<80-1e-8).map(r=>'<li>'+e(r.area+' / '+r.metric)+': '+dpmText(r.impact,2)+' '+e(b.unit)+' ('+dpmText(r.share,1)+'%; cumulative '+dpmText(r.cumulative,1)+'%)</li>').join('')+'</ul>').join('')}
     <p class="hint">80/20 is a prioritization guide, not a guaranteed split. If more than 20% of contributors are needed to reach 80%, the actual count is shown. Zero-production specific power and partial/unconfirmed target comparisons are excluded.</p></details>
     <details class="dpm-context" id="dpmSupportingDetails"><summary>Supporting details — all exceptions and trends (${m.exceptions.length})</summary>
     <p>${production.map(r=>e(r.area)+': '+dpmText(r.actual,0)+' MT / '+dpmText(r.target,0)+' MT target'+(!r.assessed?' (partial coverage)':'')).join(' · ')}</p>
