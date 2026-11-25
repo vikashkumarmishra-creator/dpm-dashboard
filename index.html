@@ -2650,12 +2650,12 @@ const MTBF_FALLBACK = { 'Additive Crusher': 50, 'Crusher': 100, 'Raw Mill': 300,
 // this is one small dictionary rather than something threaded through every row's data.
 function prodColTip(col, r){
   const isPacking = r && r.secKey==='Packing Plant';
-  const calNote = isPacking ? ' Packing Plant combines two loading lines (Old + New) into this one row, so Calendar Hours here is 2 x 24h x days in the window, not 1x -- otherwise the combined Running Hours from both lines would be compared against only one line\'s worth of calendar time.' : '';
+  const calNote = isPacking ? ' Packing Plant running hours include Old, New and Bulker, plus Special Packer for Actual Date on/after 1 November 2026. The existing calendar-capacity basis is 2 x 24h x days in the window.' : '';
   const TIPS = {
     targetProd: 'Target Production (MT) = Target TPH x Target Hours x days in the window -- or, where your Production Target sheet has a row for a given day, that day\'s real target instead of the flat estimate.',
     targetTph: 'Target TPH (tonnes/hour) -- from your Production Target sheet where available, else this section\'s modeled baseline rate.',
     targetPower: 'Target Specific Power (kWh/MT) -- from your Production Target sheet where available, else this section\'s modeled baseline rate.',
-    actualProd: 'Actual Production (MT) -- summed from your uploaded PMS shift-log data for whichever days in this window it covers; left blank (never a guessed number) if no day in the window is covered.',
+    actualProd: 'Actual Production (MT) -- summed from your uploaded PMS shift-log data for whichever days in this window it covers; left blank (never a guessed number) if no day in the window is covered.' + (isPacking ? ' Includes Old, New and Bulker; Special Packer is included for Actual Date on/after 1 November 2026.' : ''),
     actualTph: 'Actual TPH = Actual Production ÷ Run Hours for this window.',
     actualRunHours: 'Run Hours -- hours this section actually ran, summed from your PMS running-hour log for whichever days in this window it covers.' + calNote,
     actualPower: 'Actual Specific Power (kWh/MT) = SUM(kWh, your DMS Electrical log) ÷ SUM(Production) for this window.',
@@ -4750,10 +4750,8 @@ function refreshLiveProduction(payload){
       errors.push(ws+': 0 PPC rows matched this refresh (OPC='+opcCount+') -- Cement PPC, and Cement Mill Availability/Utilization/MTBF (which need both PPC+OPC, since they share one physical mill), will keep showing DATA NOT AVAILABLE until PPC rows appear.');
     }
   })();
-  // Packing Plant: combines Old + New + Bulker from the shared "Loading" worksheet, filtered by
-  // "Location of Packing Plant" (case-insensitive) -- Loaded Qty(MT) and Duration from all 3
-  // locations both count toward the combined total (validated exact match against every
-  // historical day, including the few rows using a lowercase "old").
+  // Packing Plant: sum Old + New + Bulker; include Special Packer for Actual Date
+  // on/after 1 November 2026. Both Loaded Qty(MT) and Duration use this same filter.
   (function(){
     const ws = 'Loading';
     let rows; try{ rows = getRows(ws); } catch(e){ errors.push(e.message); return; }
@@ -4761,9 +4759,12 @@ function refreshLiveProduction(payload){
           durCol = findColLive(rows,'Duration'), locCol = findColLive(rows,'Location of Packing Plant');
     if(!dCol || !qCol || !durCol || !locCol){ errors.push(ws+': column not found for Packing Plant'); return; }
     rows.forEach(r=>{
-      const loc = String(r[locCol]||'').trim().toLowerCase();
-      if(loc!=='old' && loc!=='new' && loc!=='bulker') return;
-      addRec('Packing Plant', isoOf(dCol,r), parseHoursCell(r[durCol])||0, numOrNull(r[qCol])||0);
+      const loc = String(r[locCol]||'').trim().toLowerCase().replace(/\s+/g,' ');
+      const iso = isoOf(dCol,r);
+      const include = loc==='old' || loc==='new' || loc==='bulker' ||
+        (loc==='special packer' && iso && iso>='2026-11-01');
+      if(!include) return;
+      addRec('Packing Plant', iso, parseHoursCell(r[durCol])||0, numOrNull(r[qCol])||0);
     });
   })();
   // Diagnostic: compare Cement Mill PPC/OPC's most-recent logged date against the other sections'
