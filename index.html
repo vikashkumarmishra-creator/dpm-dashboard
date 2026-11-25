@@ -578,6 +578,10 @@ html.boardroom .boardroom-toggle { background: #27e8ff !important; color: #02040
 
 
 .dpm-usage-gate{position:fixed;inset:0;z-index:10000;background:rgba(0,8,15,.88);display:flex;align-items:center;justify-content:center;padding:20px}.dpm-usage-gate[hidden]{display:none}.dpm-usage-form{max-width:470px;background:var(--panel,#0b1525);border:1px solid #22d3ee;border-radius:18px;padding:28px;color:var(--text,#e8f6ff)}.dpm-usage-form label,.dpm-usage-form input{display:block;width:100%;box-sizing:border-box}.dpm-usage-form input{padding:12px;margin:10px 0;color:#102130;background:#fff;border:1px solid #9ccbd1;border-radius:8px}.dpm-usage-form button{padding:10px 16px}.dpm-usage-form p{line-height:1.55}.dpm-usage-identity{font-size:11px;margin:6px 0 10px}.dpm-usage-identity button{margin-left:8px}.dpm-usage-identity[hidden]{display:none}
+
+.dispatch-calc-trigger{font:inherit;font-weight:700;color:inherit;background:none;border:0;padding:0;cursor:help;text-align:left}
+#dispatchCalculationTooltip{position:fixed;z-index:10000;width:min(780px,calc(100vw - 24px));max-height:70vh;overflow:auto;box-sizing:border-box;background:var(--panel,#091622);color:var(--text,#ecf5ff);border:1px solid var(--accent,#13c9df);border-radius:12px;padding:16px;box-shadow:0 12px 40px #0009;font-size:13px;line-height:1.5}
+#dispatchCalculationTooltip table{width:100%;min-width:0;border-collapse:collapse;margin:10px 0}#dispatchCalculationTooltip th,#dispatchCalculationTooltip td{padding:6px;text-align:right;white-space:normal;border-bottom:1px solid #7a91a433}#dispatchCalculationTooltip th:first-child,#dispatchCalculationTooltip td:first-child{text-align:left}#dispatchCalculationTooltip .dispatch-close{float:right;cursor:pointer}#dispatchCalculationTooltip p{margin:8px 0}
 </style>
 </head>
 <body>
@@ -2659,7 +2663,8 @@ function computeSectionRow(secKey, dateFrom, dateTo){
 
   return {secKey, targetProd, targetTph, targetPower, actualProd, actualTph, actualRunHours, actualPower, gapPct, mtbfTarget, mtbfActual, mttr, bdCount, avail, util,
     ...(secKey==='Packing Plant'?{availabilityRunHours:availabilityRun.run,availabilityCalendarHours:calendarHours,
-      availabilityPlannedHours:calendarHours-realStop.plannedHrs-realStop.delayedHrs}:{}),
+      availabilityPlannedHours:calendarHours-realStop.plannedHrs-realStop.delayedHrs,
+      dispatchWindowFrom:toISO(dateFrom),dispatchWindowTo:toISO(dateTo)}:{}),
     targetLive, targetCoverage, targetCoveredDays: realTgt.covered, targetTotalDays: realTgt.total,
     actualLive, actualCoverage, actualCoveredDays: realAct.covered, actualTotalDays: realAct.total,
     mtbfLive, mtbfCoverage, mtbfCoveredDays, mtbfTotalDays: realStop.total,
@@ -2673,6 +2678,61 @@ const MTBF_FALLBACK = { 'Additive Crusher': 50, 'Crusher': 100, 'Raw Mill': 300,
 // computeSectionRow result `r` (so a couple of columns can call out row-specific nuances, e.g.
 // Packing Plant's doubled calendar-hours basis). Column meaning doesn't change row to row, so
 // this is one small dictionary rather than something threaded through every row's data.
+function dispatchCalculationSummary(dateFrom,dateTo){
+  const days=isoRangeDays(dateFrom,dateTo),actual=REAL_ACTUAL['Packing Plant']||{},stoppage=REAL_STOPPAGE['Packing Plant']||{};
+  const rows=[{key:'old',label:'Old Packer',run:0,planned:0,delayed:0,calendar:days.length*24},
+    {key:'new',label:'New Packer',run:0,planned:0,delayed:0,calendar:days.length*24},
+    {key:'special packer',label:'Special Packer',run:0,planned:0,delayed:0,calendar:days.filter(d=>d>='2026-11-01').length*24}];
+  const historicalBulker={key:'bulker',label:'Bulker (before Nov only)',run:0,planned:0,delayed:0,calendar:0};
+  let hasRunDetail=false,hasStopDetail=false,specialStopLogged=false;
+  days.forEach(d=>{
+    const a=actual[d],s=stoppage[d];
+    if(a&&a.packers){hasRunDetail=true;rows.forEach(r=>{r.run+=a.packers[r.key]||0;});if(d<'2026-11-01')historicalBulker.run+=a.packers.bulker||0;}
+    if(s&&s.packers){hasStopDetail=true;rows.forEach(r=>{const v=s.packers[r.key];if(v){r.planned+=v.planned_hrs||0;r.delayed+=v.delayed_hrs||0;if(r.key==='special packer')specialStopLogged=true;}});}
+  });
+  if(historicalBulker.run)rows.push(historicalBulker);
+  const stop=realStoppageSum('Packing Plant',dateFrom,dateTo),run=realAvailabilityRunHours('Packing Plant',dateFrom,dateTo);
+  const total={run:run.run,planned:stop.plannedHrs,delayed:stop.delayedHrs,calendar:calendarHoursFor('Packing Plant',days.length,dateFrom,dateTo)};
+  const residual={key:'unassigned',label:'Not attributed by source snapshot',run:total.run-rows.reduce((n,r)=>n+r.run,0),planned:total.planned-rows.reduce((n,r)=>n+r.planned,0),delayed:total.delayed-rows.reduce((n,r)=>n+r.delayed,0),calendar:0};
+  if(['run','planned','delayed'].some(k=>Math.abs(residual[k])>1e-7))rows.push(residual);
+  total.available=total.calendar-total.planned-total.delayed;
+  return {from:toISO(dateFrom),to:toISO(dateTo),days:days.length,rows,total,live:run.covered>0&&stop.covered>0,
+    availability:total.available>0?total.run/total.available*100:null,utilization:total.calendar>0?total.run/total.calendar*100:null,hasRunDetail,hasStopDetail,specialStopLogged};
+}
+function dispatchCalculationText(s){
+  const h=n=>fmt(n,3);
+  return 'Dispatch Total calculation: '+s.from+' to '+s.to+' (hours)\n'+
+    'Packer | Running | Planned stoppage | Delayed | Calendar\n'+
+    s.rows.map(r=>r.label+' | '+[r.run,r.planned,r.delayed,r.calendar].map(h).join(' | ')).join('\n')+
+    '\nTotal | '+[s.total.run,s.total.planned,s.total.delayed,s.total.calendar].map(h).join(' | ')+
+    '\nAvailable planned hours = '+h(s.total.calendar)+' − '+h(s.total.planned)+' − '+h(s.total.delayed)+' = '+h(s.total.available)+
+    '\nAvailability = '+h(s.total.run)+' ÷ '+h(s.total.available)+' × 100 = '+(s.live&&s.availability!=null?fmt(s.availability,1)+'%':'unavailable')+
+    '\nUtilization = '+h(s.total.run)+' ÷ '+h(s.total.calendar)+' × 100 = '+(s.live&&s.utilization!=null?fmt(s.utilization,1)+'%':'unavailable')+
+    '\nOld maps to Packing Plant / Packing Plant Old in the stoppage source; New maps to Packing Plant New. Zero stoppage means no logged stoppage hours; idle time is not assumed to be planned stoppage.';
+}
+function showDispatchCalculation(anchor){
+  let panel=document.getElementById('dispatchCalculationTooltip');
+  if(!panel){
+    panel=document.createElement('div');panel.id='dispatchCalculationTooltip';panel.setAttribute('role','dialog');panel.setAttribute('aria-label','Dispatch Total calculation');document.body.appendChild(panel);
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')panel.hidden=true;});
+    document.addEventListener('click',e=>{if(!panel.contains(e.target)&&!e.target.closest('.dispatch-calc-trigger'))panel.hidden=true;});
+  }
+  const s=dispatchCalculationSummary(state.dateFrom,state.dateTo),h=n=>fmt(n,3),t=s.total;
+  panel.innerHTML='<button type="button" class="dispatch-close" aria-label="Close Dispatch calculation" onclick="this.parentNode.hidden=true">Close ×</button><strong>Dispatch Total — calculation backup</strong><p>'+s.from+' to '+s.to+' ('+s.days+' days). All figures below are hours.</p>'+
+    '<table><thead><tr><th>Packer</th><th>Running</th><th>Planned stoppage</th><th>Delayed</th><th>Calendar</th></tr></thead><tbody>'+
+    s.rows.map(r=>'<tr><td>'+r.label+'</td>'+[r.run,r.planned,r.delayed,r.calendar].map(v=>'<td>'+h(v)+'</td>').join('')+'</tr>').join('')+
+    '<tr><th>Total used</th>'+[t.run,t.planned,t.delayed,t.calendar].map(v=>'<th>'+h(v)+'</th>').join('')+'</tr></tbody></table>'+
+    '<p><b>Available planned hours</b> = '+h(t.calendar)+' − '+h(t.planned)+' − '+h(t.delayed)+' = <b>'+h(t.available)+' h</b></p>'+
+    '<p><b>Availability</b> = '+h(t.run)+' ÷ '+h(t.available)+' × 100 = <b>'+(s.live&&s.availability!=null?fmt(s.availability,1)+'%':'unavailable')+'</b><br><b>Utilization</b> = '+h(t.run)+' ÷ '+h(t.calendar)+' × 100 = <b>'+(s.live&&s.utilization!=null?fmt(s.utilization,1)+'%':'unavailable')+'</b></p>'+
+    '<p>From 1 November 2026: Old + New + Special; Bulker excluded from these two ratios. Each included packer has 24 calendar hours per day. Dispatch quantity and its Run Hours column include all dispatch locations.</p>'+
+    '<p>Running: Loading → Duration. Stoppage: Process HOD File → Section, Type of Stoppage, Stop/Start timestamps (split across dates). Old = “Packing Plant” / “Packing Plant Old”; New = “Packing Plant New”.</p>'+
+    (!s.specialStopLogged&&s.rows[2].calendar?'<p>Special Packer: no separately logged planned/delayed stoppage found in this window. The displayed 0 is logged hours; unused calendar time is not assumed to be planned stoppage.</p>':'')+
+    (!s.hasRunDetail||!s.hasStopDetail?'<p>Packer detail is incomplete in this snapshot. Refresh all live data. Unattributed hours are shown separately so the total still reconciles.</p>':'');
+  panel.hidden=false;
+  const rect=anchor.getBoundingClientRect();panel.style.left=Math.max(12,Math.min(rect.left,window.innerWidth-panel.offsetWidth-12))+'px';
+  panel.style.top=Math.max(130,Math.min(rect.bottom+8,window.innerHeight-panel.offsetHeight-12))+'px';
+}
+
 function prodColTip(col, r){
   const isPacking = r && r.secKey==='Packing Plant';
   const calNote = isPacking ? ' Dispatch Run Hours include all dispatch locations. Availability/utilization use Old + New + Special Packer from 1 November 2026, excluding Bulker; calendar hours are 48/day before November and 72/day from November. Selected availability running hours: '+fmt(r.availabilityRunHours,2)+'; calendar hours: '+fmt(r.availabilityCalendarHours,2)+'; planned hours after planned/delayed deductions: '+fmt(r.availabilityPlannedHours,2)+'.' : '';
@@ -2693,7 +2753,7 @@ function prodColTip(col, r){
     util: 'Utilization % = Run Hours ÷ Calendar Hours x 100.' + calNote,
     performancePct: 'Performance % = Actual Production ÷ Target Production x 100 (same ratio as % Gap, expressed as a percentage of target instead of a delta).',
   };
-  return TIPS[col] || '';
+  return (TIPS[col] || '')+(isPacking&&['avail','util','actualRunHours'].includes(col)?'\n'+dispatchCalculationText(dispatchCalculationSummary(new Date(r.dispatchWindowFrom+'T00:00:00'),new Date(r.dispatchWindowTo+'T00:00:00'))):'');
 }
 function renderProductionTable(){
   document.getElementById('prodRangeLabel').textContent = toISO(state.dateFrom)+' to '+toISO(state.dateTo)+' ('+daysBetween(state.dateFrom,state.dateTo)+' days)';
@@ -2781,7 +2841,7 @@ function renderProductionTable(){
       ? '<span class="chip live" style="margin-left:6px;" title="Availability% x Performance% x Quality% / 10000, each rounded to 2dp before multiplying -- all three real for every day in this window. Hover the Quality % figure for the parameter-by-parameter breakdown."><span class="chip-dot"></span>LIVE</span>'
       : '<span class="chip live" style="margin-left:6px;" title="Availability%, Performance% and/or Quality% are only partially real for this window -- see their own badges above. Hover the Quality % figure for the parameter-by-parameter breakdown.">LIVE (partial)</span>';
     return `<tr style="${dim?'font-style:italic;':''}">
-      <td class="rowhead"><span class="sec-dot" style="background:${color}"></span>${label}${dim?'':verifBadge}</td>
+      <td class="rowhead"><span class="sec-dot" style="background:${color}"></span>${r.secKey==='Packing Plant'?'<button type="button" class="dispatch-calc-trigger" onmouseenter="showDispatchCalculation(this)" onclick="showDispatchCalculation(this)" aria-label="Dispatch Total calculation breakdown">'+label+' ⓘ</button>':label}${dim?'':verifBadge}</td>
       <td${tt(prodColTip('targetProd',r))}>${fmt(r.targetProd,0)}</td>
       <td${tt(prodColTip('targetTph',r))}>${r.targetTph!=null?fmt(r.targetTph,0):'&mdash;'}</td>
       <td${tt(prodColTip('targetPower',r))}>${r.targetPower!=null?fmt(r.targetPower,2):'&mdash;'}</td>
@@ -4807,6 +4867,11 @@ function refreshLiveProduction(payload){
       if(!include) return;
       const run=parseHoursCell(r[durCol])||0;
       addRec('Packing Plant', iso, run, numOrNull(r[qCol])||0);
+      if(iso){
+        const day=data['Packing Plant'][iso];
+        const packers=day.packers||(day.packers={});
+        packers[loc]=(packers[loc]||0)+run;
+      }
       if(iso && iso>='2026-11-01'){
         const day=data['Packing Plant'][iso];
         day.availabilityRun=(day.availabilityRun||0)+(loc==='bulker'?0:run);
@@ -4862,12 +4927,18 @@ function refreshLiveStoppage(payload){
     'additive crusher':'Additive Crusher', 'crusher':'Crusher', 'raw mill':'Raw Mill', 'coal mill':'Coal Mill',
     'kiln':'Kiln', 'cement mill':'Cement Mill', 'packing plant':'Packing Plant',
     'packing plant new':'Packing Plant', 'packing plant old':'Packing Plant',
+    'packing plant special':'Packing Plant', 'special packer':'Packing Plant',
   };
-  function addRec(secKey, iso, patch){
+  function addRec(secKey, iso, patch, packer){
     if(!iso) return;
     const bySec = (data[secKey] = data[secKey] || {});
     const rec = (bySec[iso] = bySec[iso] || {bd_cnt:0, bd_hrs:0, planned_hrs:0, delayed_hrs:0});
     Object.keys(patch).forEach(k=>{ rec[k] += patch[k]; });
+    if(secKey==='Packing Plant'){
+      const packers=rec.packers||(rec.packers={});
+      const detail=packers[packer||'unassigned']||(packers[packer||'unassigned']={planned_hrs:0,delayed_hrs:0});
+      detail.planned_hrs+=patch.planned_hrs||0;detail.delayed_hrs+=patch.delayed_hrs||0;
+    }
     const b = (bounds[secKey] = bounds[secKey] || {min: iso, max: iso});
     if(iso < b.min) b.min = iso;
     if(iso > b.max) b.max = iso;
@@ -4920,7 +4991,9 @@ function refreshLiveStoppage(payload){
   const TYPE_KEY = {breakdown:'bd_hrs', planned:'planned_hrs', delayed:'delayed_hrs', delated:'delayed_hrs'};
   const DAY_MS = 24*60*60*1000;
   rows.forEach(r=>{
-    const sec = SEC_CANON[String(r[secCol]||'').trim().toLowerCase()];
+    const sourceSection=String(r[secCol]||'').trim().toLowerCase().replace(/\s+/g,' ');
+    const sec = SEC_CANON[sourceSection];
+    const packer=sourceSection==='packing plant new'?'new':(['packing plant','packing plant old'].includes(sourceSection)?'old':(['packing plant special','special packer'].includes(sourceSection)?'special packer':null));
     if(!sec) return;
     const typ = String(r[typeCol]||'').trim().toLowerCase();
     const key = TYPE_KEY[typ];
@@ -4950,7 +5023,7 @@ function refreshLiveStoppage(payload){
           const patch = {bd_cnt:0, bd_hrs:0, planned_hrs:0, delayed_hrs:0};
           patch[key] = hours;
           if(firstSeg && key==='bd_hrs'){ patch.bd_cnt = 1; if(deptCanon) addDeptRec(sec, iso, deptCanon); }
-          addRec(sec, iso, patch);
+          addRec(sec, iso, patch, packer);
           if(deptCanon) addDeptHours(sec,iso,deptCanon,hours);
           firstSeg = false;
         }
@@ -4964,7 +5037,7 @@ function refreshLiveStoppage(payload){
       const dur = numOrNull(r[durCol]) || 0;
       const patch = {bd_cnt: (key==='bd_hrs')?1:0, bd_hrs:0, planned_hrs:0, delayed_hrs:0};
       patch[key] = dur;
-      addRec(sec, iso, patch);
+      addRec(sec, iso, patch, packer);
       if(deptCanon) addDeptHours(sec,iso,deptCanon,dur);
       if(deptCanon) addDeptRec(sec, iso, deptCanon);
     }
