@@ -3494,6 +3494,13 @@ function chartBaseOptions(unit){
 }
 
 /* ============================= Quality tables ============================= */
+// Roof Xpert mapping/target snapshot read from BI_Support Dim_Parameter_Cement (25 Nov 2026).
+// Live target refresh overrides these values; actual strength remains absent until Main Sheet has readings.
+const ROOF_XPERT_TARGET_SNAPSHOT = [{"Parameter_ID":21,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Blaine (m2/kg)","Target":350,"Min":345,"Max":370,"Unit":"m2/kg","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Blaine (m2/kg)","QMS_Column_No":"H:H"},{"Parameter_ID":22,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Residue (R+ 45 μm) %","Target":14,"Min":12,"Max":15,"Unit":"%","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Residue (R+ 45 μm) %","QMS_Column_No":"I:I"},{"Parameter_ID":23,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Chemical Analysis in % (LOI)","Target":2.5,"Min":1,"Max":2.5,"Unit":"%","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Chemical Analysis in % (LOI)","QMS_Column_No":"K:K"},{"Parameter_ID":24,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Chemical Analysis in % (SO3)","Target":2.8,"Min":2.4,"Max":3,"Unit":"%","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Chemical Analysis in % (SO3)","QMS_Column_No":"M:M"},{"Parameter_ID":25,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Chemical Analysis in % (CaO)","Target":50,"Min":49,"Max":51,"Unit":"%","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Chemical Analysis in % (CaO)","QMS_Column_No":"N:N"},{"Parameter_ID":26,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"Chemical Analysis in % (MgO)","Target":2.5,"Min":0,"Max":2.5,"Unit":"%","File Name":"QMS","Work_Sheet_Name":"Cement Mill Grinding Log Sheet","QMS_Columns":"Chemical Analysis in % (MgO)","QMS_Column_No":"O:O"},{"Parameter_ID":27,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"1 Days","Target":18,"Min":18,"Max":21,"Unit":"MPA","File Name":"Compressive Strength","Work_Sheet_Name":"Main Sheet","QMS_Columns":"Compressive Strength in Mpa 01- Day","QMS_Column_No":"K:K"},{"Parameter_ID":28,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"3 Days","Target":27,"Min":27,"Max":30,"Unit":"MPA","File Name":"Compressive Strength","Work_Sheet_Name":"Main Sheet","QMS_Columns":"Compressive Strength in Mpa 03-Day","QMS_Column_No":"L:L"},{"Parameter_ID":29,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"7 Days","Target":35,"Min":35,"Max":38,"Unit":"MPA","File Name":"Compressive Strength","Work_Sheet_Name":"Main Sheet","QMS_Columns":"Compressive Strength in Mpa 07-Days","QMS_Column_No":"M:M"},{"Parameter_ID":30,"Section_ID":106,"Section_Name":"Cement Mill","Cement Type":"Roof Xpert","Parameter_Name":"28 Days","Target":53,"Min":53,"Max":56,"Unit":"MPA","File Name":"Compressive Strength","Work_Sheet_Name":"Main Sheet","QMS_Columns":"Compressive Strength in Mpa 28-Days","QMS_Column_No":"N:N"}];
+ROOF_XPERT_TARGET_SNAPSHOT.forEach(p=>{
+  if(!(RESOURCE.dim_parameter_cement||[]).some(r=>r['Cement Type']===p['Cement Type']&&r.Parameter_Name===p.Parameter_Name))RESOURCE.dim_parameter_cement.push(p);
+});
+RESOURCE.real_quality_daily['Cement Roof Xpert'] = {"Blaine (m2/kg)":{"2026-11-17":{"n":5,"sum":1568.0,"min":273.0,"max":362.0,"vals":[312.0,314.0,273.0,307.0,362.0]},"2026-11-22":{"n":2,"sum":627.0,"min":309.0,"max":318.0,"vals":[309.0,318.0]}},"Residue (R+ 45 μm) %":{"2026-11-17":{"n":5,"sum":76.33999999999999,"min":11.94,"max":20.4,"vals":[20.4,13.0,18.4,12.6,11.94]},"2026-11-22":{"n":2,"sum":20.799999999999997,"min":10.2,"max":10.6,"vals":[10.2,10.6]}},"Chemical Analysis in % (SO3)":{"2026-11-17":{"n":5,"sum":13.16,"min":2.5,"max":2.89,"vals":[2.5,2.63,2.89,2.59,2.55]},"2026-11-22":{"n":2,"sum":5.45,"min":2.72,"max":2.73,"vals":[2.72,2.73]}},"Chemical Analysis in % (CaO)":{"2026-11-17":{"n":5,"sum":269.35,"min":52.21,"max":57.76,"vals":[52.83,52.41,57.76,52.21,54.14]},"2026-11-22":{"n":2,"sum":99.4,"min":49.39,"max":50.01,"vals":[50.01,49.39]}},"Chemical Analysis in % (MgO)":{"2026-11-17":{"n":5,"sum":7.53,"min":1.38,"max":1.6,"vals":[1.53,1.38,1.48,1.6,1.54]},"2026-11-22":{"n":2,"sum":3.06,"min":1.5,"max":1.56,"vals":[1.56,1.5]}}};
 const QUALITY_GROUPS = [
   {key:'Crusher', label:'Crusher', dimSection:'Crusher', params:['CaO','MgO','Sio2','So3','Sieve Size','LSF']},
   {key:'Raw Mill', label:'Raw Mill', dimSection:'Raw Mill', params:['Residue % (R+90 μm)','L.S.F %','S.M %','So3']},
@@ -3503,6 +3510,7 @@ const QUALITY_GROUPS = [
   {key:'Fuel Mill', label:'Fuel Mill', dimSection:'Coal Mill', params:['Residue % (R+90 μm)','Residue % (R+212 μm)','Raw Coal Ash %','ASH %']},
   {key:'Cement PPC', label:'Cement PPC (live)', real:true, cementType:'PPC', excludeParams:['7 Days','28 Days']},
   {key:'Cement OPC', label:'Cement OPC (live)', real:true, cementType:'OPC', excludeParams:['7 Days','28 Days']},
+  {key:'Cement Roof Xpert', label:'Roof Xpert (live)', real:true, cementType:'Roof Xpert', excludeParams:['7 Days','28 Days']},
 ];
 // Compressive Strength -- its own section, decoupled from the pass/fail Quality tables above
 // because 7/28-Day results inherently lag the sample date by that many days (a sample taken
@@ -3511,6 +3519,7 @@ const QUALITY_GROUPS = [
 const COMPRESSIVE_GROUPS = [
   {key:'CS PPC', label:'PPC (Grinding)', dataKey:'Cement PPC', cementType:'PPC'},
   {key:'CS OPC', label:'OPC (Grinding)', dataKey:'Cement OPC', cementType:'OPC'},
+  {key:'CS Roof Xpert', label:'Roof Xpert (Grinding)', dataKey:'Cement Roof Xpert', cementType:'Roof Xpert'},
   {key:'CS Clinker', label:'Clinker (Ballmill)', dataKey:'Clinker Ballmill', cementType:null},
 ];
 const CS_PARAMS = ['1 Days','3 Days','7 Days','28 Days'];
@@ -3737,6 +3746,7 @@ function qualityRow(displayName, target, dataKey, sourceParam, seedKey, seedPara
     // show blank with a plain "data not available" badge rather than a modeled/fake value.
     badge = '<span class="chip sample" style="margin-left:6px;" title="No real reading falls inside this window for this parameter -- the section may not have been running, or this data has not synced yet. Showing blank rather than a guessed value.">DATA NOT AVAILABLE</span>';
   }
+  if(coverage==='none'&&dataKey==='Cement Roof Xpert')badge=badge.replace('DATA NOT AVAILABLE','NO DATA');
   if(avg==null) statusHtml = '<span class="muted-cell">&mdash;</span>';
   else if(!hasTarget) statusHtml = '<span class="muted-cell">No target set</span>';
   else statusHtml = (avg>=target.Min && avg<=target.Max) ? '<span class="status-chip good">Within spec</span>' : '<span class="status-chip critical">Out of spec</span>';
@@ -3809,7 +3819,7 @@ function renderQualityTabs(){
       : '<span class="chip sample" style="vertical-align:middle"><span class="chip-dot"></span>NO DATA</span>';
     const cementNote = g.real ? ` Blaine/Residue/LOI/SO3/CaO/MgO come from the Cement Mill Grinding Log Sheet, filtered by Type of Cement = ${g.cementType}. 1-Day and 3-Day strength come from the Compressive Strength Main Sheet, filtered to Type of Product = &quot;${g.cementType} Grinding&quot; only (&quot;${g.cementType} Packing&quot; and &quot;Mkt ${g.cementType}&quot; excluded). 7-Day and 28-Day have moved to the dedicated <a href="#compressive-strength">Compressive Strength</a> section below, since those results lag the sample date by that many days.` : (g.key==='Clinker' ? ' The last row (1 Day, Ballmill) is a grindability check from the Compressive Strength Main Sheet’s "Clinker Ballmill" rows; its Target/Min/Max (if shown) come from a matching row in your Dim_Parameter or Dim_Parameter_Cement sheet keyed under "Clinker Ballmill" -- otherwise it shows the real reading with no spec verdict.' : '');
     return `<div class="quality-tab-panel tab-panel ${i===0?'active':''}" id="qp-${g.key}">
-      <p class="hint" style="margin:0 2px 8px;">${panelBadge} computed from your QMS log-sheet export for this section, summed/averaged over the date range selected above &mdash; the badge on each row shows exactly how many of the selected days have a real reading for that specific parameter.${cementNote}</p>
+      <p class="hint" style="margin:0 2px 8px;">${panelBadge} computed from your QMS log-sheet export for this section, summed/averaged over the date range selected above &mdash; the badge on each row shows exactly how many of the selected days have a real reading for that specific parameter.${cementNote}${g.cementType==='Roof Xpert'?' Main Sheet also accepts the product label &quot;Roof Xpert&quot;; strength rows show NO DATA until matching results are recorded.':''}</p>
       ${sectionQualitySummaryHtml(sectionSummary)}
       <div class="table-wrap">
         <table>
@@ -3899,7 +3909,9 @@ function renderCompressiveStrengthTabs(){
       : (anyFull||anyPartial)
       ? '<span class="chip live" style="vertical-align:middle">LIVE (partial)</span>'
       : '<span class="chip sample" style="vertical-align:middle"><span class="chip-dot"></span>NO DATA</span>';
-    const note = g.cementType
+    const note = g.cementType==='Roof Xpert'
+      ? 'From the Compressive Strength Main Sheet, Type of Product = &quot;Roof Xpert Grinding&quot; or &quot;Roof Xpert&quot;. Packing and market samples are excluded. Registered targets remain visible; NO DATA is shown until a real result is available for the selected sample dates.'
+      : g.cementType
       ? `From the Compressive Strength Main Sheet, Type of Product = &quot;${g.cementType} Grinding&quot; only. A sample taken near the end of your selected window won&rsquo;t have a 7-Day or 28-Day result yet &mdash; that shows as a NO DATA row, not an error.`
       : `From the Compressive Strength Main Sheet, Type of Product = &quot;Clinker Ballmill&quot; &mdash; a grindability check. Target/Min/Max here come from a matching row in your Dim_Parameter or Dim_Parameter_Cement sheet keyed under &quot;Clinker Ballmill&quot;, if one exists; otherwise you&rsquo;ll just see the real reading with no spec verdict.`;
     return `<div class="cs-tab-panel tab-panel ${g.key===csActiveKey?'active':''}" id="cs-${g.key}">
@@ -4678,7 +4690,12 @@ function refreshLiveQuality(payload){
     if(ws === 'Cement Mill Grinding Log Sheet'){ typeCol = findColLive(rows,'Type of Cement'); wantType = ctype.toUpperCase(); }
     else if(ws === 'Main Sheet'){ typeCol = findColLive(rows,'Type of Product'); wantType = ctype.toUpperCase()+' GRINDING'; }
     rows.forEach(r=>{
-      if(typeCol && String(r[typeCol]||'').trim().toUpperCase()!==wantType) return;
+      if(typeCol){
+        const tag=String(r[typeCol]||'').trim().toUpperCase();
+        if(ctype==='Roof Xpert'&&ws==='Main Sheet'){
+          if(!['ROOF XPERT GRINDING','ROOF XPERT'].includes(tag.replace(/\s+/g,' ')))return;
+        }else if(tag!==wantType)return;
+      }
       const d = parseGvizDate(r[dCol]) || (typeof r[dCol]==='string' ? new Date(r[dCol]) : null);
       const iso = (d && !isNaN(d)) ? toISO(d) : null;
       addLiveStat(out, groupKey, p.Parameter_Name, iso, numOrNull(r[valCol]));
