@@ -1293,8 +1293,11 @@ function plantDeptBreakdownCount(dept, dateFrom, dateTo){
 // inflated (e.g. Availability > 100%) because two lines' worth of running hours is being compared
 // against only one line's worth of calendar time. Every other physical section is a single line,
 // so the multiplier is 1 there.
-function calendarHoursFor(secKey, nDays){
-  return 24 * nDays * (secKey==='Packing Plant' ? 2 : 1);
+function calendarHoursFor(secKey, nDays, dateFrom, dateTo){
+  if(secKey!=='Packing Plant')return 24*nDays;
+  // Keep the historical 2-line basis; use 3 bag packers from November 2026.
+  if(!dateFrom||!dateTo)return 48*nDays;
+  return isoRangeDays(dateFrom,dateTo).reduce((sum,d)=>sum+(d>='2026-11-01'?72:48),0);
 }
 /* ============================= Availability -- By Responsible Department ============================= */
 // Downtime HOURS (Breakdown ONLY -- per your instruction, Delayed no longer counts as
@@ -1323,7 +1326,7 @@ function plantDeptDowntimeHours(dept, dateFrom, dateTo){
 function plannedHoursForWindow(secKey, dateFrom, dateTo){
   const stop = realStoppageSum(secKey, dateFrom, dateTo);
   const nDays = daysBetween(dateFrom, dateTo) || 1;
-  const calendarHours = calendarHoursFor(secKey, nDays);
+  const calendarHours = calendarHoursFor(secKey, nDays, dateFrom, dateTo);
   return { plannedHours: calendarHours - stop.plannedHrs - stop.delayedHrs, live: stop.covered>0, full: stop.full };
 }
 // Real Target MTBF (hours) for one physical section, for the calendar month the END of the
@@ -1362,6 +1365,24 @@ function realMtbfRunHours(secKey, dateFrom, dateTo){
   }
   return realActualSum(secKey, dateFrom, dateTo);
 }
+// Availability/utilization use the three bag packers from November; Dispatch Run Hours
+// and TPH retain Old + New + Bulker + Special Packer as requested separately.
+function realAvailabilityRunHours(secKey,dateFrom,dateTo){
+  if(secKey!=='Packing Plant')return realMtbfRunHours(secKey,dateFrom,dateTo);
+  const days=isoRangeDays(dateFrom,dateTo),daily=REAL_ACTUAL['Packing Plant']||{};
+  let run=0,covered=0;
+  days.forEach(d=>{
+    if(!withinBounds(REAL_ACTUAL_BOUNDS,'Packing Plant',d))return;
+    const r=daily[d];
+    if(d<'2026-11-01'){run+=r?r.run||0:0;covered++;}
+    else if(!r){covered++;}
+    else if(typeof r.availabilityRun==='number'&&Number.isFinite(r.availabilityRun)){
+      run+=r.availabilityRun;covered++;
+    }
+  });
+  return {run,covered,total:days.length,full:covered===days.length};
+}
+
 // Combined production (the denominator) for whichever physical unit secKey's power meter covers.
 // Cement Mill's meter is shared by PPC+OPC (one mill); every other section maps 1:1 to its own
 // realActualSum (Crusher already combines HG+LG, Packing Plant already combines Old+New+Bulker,
@@ -1627,9 +1648,9 @@ function computeAvailUtilForDepts(depts, dateFrom, dateTo){
   const rows = depts.map(dept=>{
     const stop = realStoppageSum(dept, dateFrom, dateTo);
     const runKey = dept==='Cement Mill' ? 'Cement Mill PPC' : dept;
-    const r = realMtbfRunHours(runKey, dateFrom, dateTo);
+    const r = realAvailabilityRunHours(runKey, dateFrom, dateTo);
     const coveredDays = Math.min(stop.covered, r.covered);
-    const deptCalendarHours = calendarHoursFor(dept, nDaysForCal);
+    const deptCalendarHours = calendarHoursFor(dept, nDaysForCal, dateFrom, dateTo);
     const deptPlanned = deptCalendarHours - stop.plannedHrs - stop.delayedHrs;
     run += r.run; planned += deptPlanned; calendar += deptCalendarHours;
     return {label: dept==='Coal Mill'?'Fuel Mill':dept, run: r.run, planned: deptPlanned, calendar: deptCalendarHours,
@@ -2289,7 +2310,7 @@ function renderKPIs(){
         badge: mainAU.badge, rows: mainAU.rows, metric:'avail', footLabel: 'Main Section',
         totalRun: mainAU.totalRun, totalPlanned: mainAU.totalPlanned, totalCalendar: mainAU.totalCalendar, result: mainAU.avail } },
     {label:'Support Section Availability', value: fmt(supportAU.avail,1), unit:'%', delta: supportAU.avail-95, sub: 'Target 95.0%',
-      hover: { kind:'hours', title:'Support Section Availability = &Sigma; Running Hour &divide; &Sigma; Planned Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant contributes double Calendar/Planned Hours since it combines two loading lines)',
+      hover: { kind:'hours', title:'Support Section Availability = &Sigma; Running Hour &divide; &Sigma; Planned Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant uses 48 calendar hours/day before November 2026 and 72/day thereafter; availability running hours exclude Bulker from November)',
         badge: supportAU.badge, rows: supportAU.rows, metric:'avail', footLabel: 'Support Section',
         totalRun: supportAU.totalRun, totalPlanned: supportAU.totalPlanned, totalCalendar: supportAU.totalCalendar, result: supportAU.avail } },
     {label:'Main Section Utilization', value: fmt(mainAU.util,1), unit:'%', delta: mainAU.util-95, sub: 'Target 95.0%',
@@ -2297,7 +2318,7 @@ function renderKPIs(){
         badge: mainAU.badge, rows: mainAU.rows, metric:'util', footLabel: 'Main Section',
         totalRun: mainAU.totalRun, totalPlanned: mainAU.totalPlanned, totalCalendar: mainAU.totalCalendar, result: mainAU.util } },
     {label:'Support Section Utilization', value: fmt(supportAU.util,1), unit:'%', delta: supportAU.util-95, sub: 'Target 95.0%',
-      hover: { kind:'hours', title:'Support Section Utilization = &Sigma; Running Hour &divide; &Sigma; Calendar Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant contributes double Calendar Hours since it combines two loading lines)',
+      hover: { kind:'hours', title:'Support Section Utilization = &Sigma; Running Hour &divide; &Sigma; Calendar Hours &times; 100, summed over Crusher, Additive Crusher &amp; Packing Plant (Support Section = Crusher + Additive Crusher + both Packing Plant lines; Packing Plant uses 48 calendar hours/day before November 2026 and 72/day thereafter; availability running hours exclude Bulker from November)',
         badge: supportAU.badge, rows: supportAU.rows, metric:'util', footLabel: 'Support Section',
         totalRun: supportAU.totalRun, totalPlanned: supportAU.totalPlanned, totalCalendar: supportAU.totalCalendar, result: supportAU.util } },
     {label:'Specific Power Till Cement', value: actualSpecPowerCement===null?'N/A':fmt(actualSpecPowerCement,2), unit:'kWh/MT',
@@ -2611,14 +2632,16 @@ function computeSectionRow(secKey, dateFrom, dateTo){
   // = BD + Delayed + Planned + Running). Reuses realStop/realRunForMtbf from the MTBF block above
   // -- same real data, same full/partial/none coverage semantics, so a partially-covered window
   // still derives real Avail/Util from the covered days' real sums.
-  const calendarHours = calendarHoursFor(secKey, nDays);
-  const availUtilCoverage = mtbfCoverage;
+  const calendarHours = calendarHoursFor(secKey, nDays, dateFrom, dateTo);
+  const availabilityRun=realAvailabilityRunHours(secKey,dateFrom,dateTo);
+  const availUtilCoveredDays=Math.min(realStop.covered,availabilityRun.covered);
+  const availUtilCoverage=availUtilCoveredDays===0?'none':(realStop.full&&availabilityRun.full?'full':'partial');
   const availUtilLive = availUtilCoverage!=='none';
   let avail, util;
   if(availUtilLive){
     const plannedHours = calendarHours - realStop.plannedHrs - realStop.delayedHrs;
-    avail = plannedHours>0 ? (realRunForMtbf.run/plannedHours)*100 : 0;
-    util = calendarHours>0 ? (realRunForMtbf.run/calendarHours)*100 : 0;
+    avail = plannedHours>0 ? (availabilityRun.run/plannedHours)*100 : 0;
+    util = calendarHours>0 ? (availabilityRun.run/calendarHours)*100 : 0;
   } else {
     // No real Plant Stoppage / PMS running-hour coverage anywhere in this window -- never guess
     // a number: leave blank.
@@ -2635,11 +2658,13 @@ function computeSectionRow(secKey, dateFrom, dateTo){
   const qualityCoverage = !qualityHasMapping ? 'none' : (realBadQ.covered===0 ? 'none' : (realBadQ.full ? 'full' : 'partial'));
 
   return {secKey, targetProd, targetTph, targetPower, actualProd, actualTph, actualRunHours, actualPower, gapPct, mtbfTarget, mtbfActual, mttr, bdCount, avail, util,
+    ...(secKey==='Packing Plant'?{availabilityRunHours:availabilityRun.run,availabilityCalendarHours:calendarHours,
+      availabilityPlannedHours:calendarHours-realStop.plannedHrs-realStop.delayedHrs}:{}),
     targetLive, targetCoverage, targetCoveredDays: realTgt.covered, targetTotalDays: realTgt.total,
     actualLive, actualCoverage, actualCoveredDays: realAct.covered, actualTotalDays: realAct.total,
     mtbfLive, mtbfCoverage, mtbfCoveredDays, mtbfTotalDays: realStop.total,
     actualPowerLive, powerCoverage, powerCoveredDays: realPow.covered, powerTotalDays: realPow.total,
-    availUtilLive, availUtilCoverage, availUtilCoveredDays: mtbfCoveredDays, availUtilTotalDays: realStop.total,
+    availUtilLive, availUtilCoverage, availUtilCoveredDays: availUtilCoveredDays, availUtilTotalDays: realStop.total,
     badQualityProd: realBadQ.badProd, qualityHasMapping, qualityCoverage, qualityCoveredDays: realBadQ.covered, qualityTotalDays: realBadQ.total, qualityBreakdown: realBadQ.breakdown||[]};
 }
 const MTBF_FALLBACK = { 'Additive Crusher': 50, 'Crusher': 100, 'Raw Mill': 300, 'Coal Mill': 200, 'Kiln': 150, 'Cement Mill PPC': 150, 'Cement Mill OPC': 150, 'Packing Plant': 25 };
@@ -2650,7 +2675,7 @@ const MTBF_FALLBACK = { 'Additive Crusher': 50, 'Crusher': 100, 'Raw Mill': 300,
 // this is one small dictionary rather than something threaded through every row's data.
 function prodColTip(col, r){
   const isPacking = r && r.secKey==='Packing Plant';
-  const calNote = isPacking ? ' Packing Plant running hours include Old, New and Bulker, plus Special Packer for Actual Date on/after 1 November 2026. The existing calendar-capacity basis is 2 x 24h x days in the window.' : '';
+  const calNote = isPacking ? ' Dispatch Run Hours include all dispatch locations. Availability/utilization use Old + New + Special Packer from 1 November 2026, excluding Bulker; calendar hours are 48/day before November and 72/day from November. Selected availability running hours: '+fmt(r.availabilityRunHours,2)+'; calendar hours: '+fmt(r.availabilityCalendarHours,2)+'; planned hours after planned/delayed deductions: '+fmt(r.availabilityPlannedHours,2)+'.' : '';
   const TIPS = {
     targetProd: 'Target Production (MT) = Target TPH x Target Hours x days in the window -- or, where your Production Target sheet has a row for a given day, that day\'s real target instead of the flat estimate.',
     targetTph: 'Target TPH (tonnes/hour) -- from your Production Target sheet where available, else this section\'s modeled baseline rate.',
@@ -2824,11 +2849,11 @@ function renderProductionTable(){
   PHYSICAL_DEPTS.forEach(dept=>{
     const stop = realStoppageSum(dept, state.dateFrom, state.dateTo);
     const runKey = dept==='Cement Mill' ? 'Cement Mill PPC' : dept; // triggers the PPC+OPC combining branch
-    const run = realMtbfRunHours(runKey, state.dateFrom, state.dateTo);
+    const run = realAvailabilityRunHours(runKey, state.dateFrom, state.dateTo);
     const coveredDays = Math.min(stop.covered, run.covered);
     if(coveredDays>0) plantAvailUtilLive = true;
     if(!(stop.full && run.full)) plantAvailUtilFull = false;
-    const deptCalendarHours = calendarHoursFor(dept, nDaysForCal);
+    const deptCalendarHours = calendarHoursFor(dept, nDaysForCal, state.dateFrom, state.dateTo);
     plantAvailRun += run.run;
     plantPlannedHours += deptCalendarHours - stop.plannedHrs - stop.delayedHrs;
     plantCalendarHours += deptCalendarHours;
@@ -2879,8 +2904,8 @@ function renderProductionTable(){
       <td${tt('Plant MTBF = Total Run Hours ÷ Total Breakdown Count across the 7 physical departments -- total over total, not an average of each department\'s MTBF.')}>${fmt(plantMtbf,0)}${plantMtbfBadge}</td>
       <td>&mdash;</td>
       <td${tt('Breakdown Count summed across the 7 physical departments.')}>${totalBD}</td>
-      <td${tt('Plant Availability % = Total Run Hours ÷ Total Planned Hours x 100, summed over the 7 physical departments (Packing Plant contributes double Calendar/Planned Hours since it combines two loading lines).')}>${fmt(plantAvail,1)}%${plantAvailUtilBadge}</td>
-      <td${tt('Plant Utilization % = Total Run Hours ÷ Total Calendar Hours x 100, summed over the 7 physical departments (Packing Plant contributes double Calendar Hours since it combines two loading lines).')}>${fmt(plantUtil,1)}%${plantAvailUtilBadge}</td>
+      <td${tt('Plant Availability % = Total Run Hours ÷ Total Planned Hours x 100, summed over the 7 physical departments (Packing Plant uses 48 calendar hours/day before November 2026 and 72/day thereafter; availability running hours exclude Bulker from November).')}>${fmt(plantAvail,1)}%${plantAvailUtilBadge}</td>
+      <td${tt('Plant Utilization % = Total Run Hours ÷ Total Calendar Hours x 100, summed over the 7 physical departments (Packing Plant uses 48 calendar hours/day before November 2026 and 72/day thereafter; availability running hours exclude Bulker from November).')}>${fmt(plantUtil,1)}%${plantAvailUtilBadge}</td>
       <td${tt('Plant Performance % = Total Actual Production ÷ Total Target Production x 100.')}>${fmt(plantPerformancePct,1)}%${plantPerformanceBadge}</td>
     </tr>`;
   }
@@ -4245,6 +4270,22 @@ async function fetchLiveApiPayload(force){
   liveApiPayload = json;
   return json;
 }
+// Read the current Loading sheet separately so backdated corrections do not wait
+// for the large all-worksheet cache. Replace its snapshot; never sum the two copies.
+async function fetchFreshPackingLoading(){
+  const url=new URL(document.getElementById('appsScriptUrlInput').value.trim());
+  url.searchParams.set('loading','1');
+  const res=await fetch(url.toString(),{cache:'no-store'});
+  if(!res.ok)throw new Error('Loading HTTP '+res.status);
+  const payload=await res.json(),rows=payload.loadingRows;
+  if(!Array.isArray(rows)||!rows.length||!findColLive(rows,'Actual Date')||!findColLive(rows,'Loaded Qty(MT)')||!findColLive(rows,'Duration')||!findColLive(rows,'Location of Packing Plant'))
+    throw new Error('Fresh Loading rows unavailable or required columns missing');
+  return rows;
+}
+function withFreshPackingLoading(payload,result){
+  return result&&Array.isArray(result.rows)?{...payload,worksheets:{...(payload.worksheets||{}),Loading:result.rows}}:payload;
+}
+
 /* ============================= Published-CSV stoppage source =============================
    Per your request: the Apps Script call reads "Process HOD File" alongside every other worksheet
    in one slow exec, and that read has repeatedly lagged a day or more behind your other live
@@ -4764,7 +4805,12 @@ function refreshLiveProduction(payload){
       const include = loc==='old' || loc==='new' || loc==='bulker' ||
         (loc==='special packer' && iso && iso>='2026-11-01');
       if(!include) return;
-      addRec('Packing Plant', iso, parseHoursCell(r[durCol])||0, numOrNull(r[qCol])||0);
+      const run=parseHoursCell(r[durCol])||0;
+      addRec('Packing Plant', iso, run, numOrNull(r[qCol])||0);
+      if(iso && iso>='2026-11-01'){
+        const day=data['Packing Plant'][iso];
+        day.availabilityRun=(day.availabilityRun||0)+(loc==='bulker'?0:run);
+      }
     });
   })();
   // Diagnostic: compare Cement Mill PPC/OPC's most-recent logged date against the other sections'
@@ -5265,17 +5311,18 @@ async function doLiveQualityRefresh(){
     // Fetch your Apps Script payload and the published Plant Stoppage CSV concurrently -- the CSV
     // fetch is a plain static-file request so it typically finishes long before the Apps Script
     // call does; running them together means the CSV never adds to the wait.
-    const [payload, csvRowsResult, gridExportResult, cfAdditiveResult, generationCheckResult] = await Promise.all([
+    const [payload, csvRowsResult, gridExportResult, cfAdditiveResult, generationCheckResult, loadingRowsResult] = await Promise.all([
       fetchLiveApiPayload(true),
       fetchPublishedStoppageCsv().then(rows => ({rows, error: null})).catch(e => ({rows: null, error: e.message})),
       fetchTopGridExport().then(daily=>({daily,error:null})).catch(e=>({daily:{},error:e.message})),
       fetchClinkerAdditives().then(data=>({data,error:null})).catch(e=>({data:null,error:e.message})),
       fetchGenerationCheck().then(data=>setGenerationCheckResult({data,error:null})).catch(e=>setGenerationCheckResult({data:[],error:e.message})),
+      fetchFreshPackingLoading().then(rows=>({rows,error:null})).catch(e=>({rows:null,error:e.message})),
     ]);
     if(refreshTicker){ clearInterval(refreshTicker); refreshTicker = null; }
     const {data, errors} = refreshLiveQuality(payload);
     const targetResult = refreshLiveTargets(payload);
-    const prodResult = refreshLiveProduction(payload);
+    const prodResult = refreshLiveProduction(withFreshPackingLoading(payload,loadingRowsResult));
     const stopResultAppsScript = refreshLiveStoppage(payload);
     let stopResult;
     if(csvRowsResult.rows){
@@ -5314,6 +5361,7 @@ async function doLiveQualityRefresh(){
     if(gridExportResult.error) allErrors.push('Grid Export: '+gridExportResult.error);
     if(cfAdditiveResult.error) allErrors.push('Clinker additives: '+cfAdditiveResult.error);
     if(generationCheckResult.error) allErrors.push('Generation Check: '+generationCheckResult.error);
+    if(loadingRowsResult.error)allErrors.push('Fresh Dispatch Loading: '+loadingRowsResult.error+'; using cached Loading data.');
     const stamp = new Date().toLocaleString('en-IN',{dateStyle:'medium', timeStyle:'short'});
     if(gotAny || targetResult.updated>0 || gotProd || gotStop || gotPower || gotTargetProd || gotAdditive || gotClinkerActual || gotCppActual || gotCppTarget || gotSpHeatTarget || gotSpHeatActual){
       if(gotAny) REAL_QUALITY = data;
@@ -5333,13 +5381,14 @@ async function doLiveQualityRefresh(){
       if(gotSpHeatActual){ REAL_KILN_SPHEAT_ACTUAL_ROWS = Object.assign({}, REAL_KILN_SPHEAT_ACTUAL_ROWS, spHeatResult.actualRows); if(spHeatResult.actualBounds) REAL_KILN_SPHEAT_ACTUAL_BOUNDS = spHeatResult.actualBounds; }
       const targetNote = targetResult.updated>0 ? ` &mdash; ${targetResult.updated} parameter target(s) refreshed` : ' &mdash; parameter targets could not be refreshed (readings still updated)';
       const scopeNote = (gotProd||gotStop||gotPower||gotTargetProd) ? ' &mdash; Production, Production Target, MTBF/Stoppage and Power also refreshed' : '';
+      const loadingNote=loadingRowsResult.rows?' &mdash; Dispatch refreshed directly from Loading':'';
       const cfNote = (gotAdditive||gotClinkerActual) ? ' &mdash; Clinker Factor '+(gotAdditive&&gotClinkerActual?'Target &amp; Actual':(gotAdditive?'Target':'Actual'))+' also refreshed' : '';
       const cppNote = (gotCppActual||gotCppTarget) ? ' &mdash; CPP '+(gotCppActual&&gotCppTarget?'Actual &amp; Target':(gotCppActual?'Actual':'Target'))+' also refreshed' : '';
       const spHeatNote = (gotSpHeatTarget||gotSpHeatActual) ? ' &mdash; Kiln Specific Heat '+(gotSpHeatTarget&&gotSpHeatActual?'Target &amp; Actual':(gotSpHeatTarget?'Target':'Actual'))+' also refreshed' : '';
       if(status){
         status.innerHTML = allErrors.length
-          ? `<span class="chip live"><span class="chip-dot"></span>LIVE (partial)</span> refreshed ${stamp}${targetNote}${scopeNote}${cfNote}${cppNote}${spHeatNote} &mdash; ${allErrors.length} issue(s): ${allErrors.join('; ')}`
-          : `<span class="chip live"><span class="chip-dot"></span>LIVE</span> refreshed ${stamp} from your Apps Script endpoint${targetNote}${scopeNote}${cfNote}${cppNote}${spHeatNote}`;
+          ? `<span class="chip live"><span class="chip-dot"></span>LIVE (partial)</span> refreshed ${stamp}${targetNote}${scopeNote}${loadingNote}${cfNote}${cppNote}${spHeatNote} &mdash; ${allErrors.length} issue(s): ${allErrors.join('; ')}`
+          : `<span class="chip live"><span class="chip-dot"></span>LIVE</span> refreshed ${stamp} from your Apps Script endpoint${targetNote}${scopeNote}${loadingNote}${cfNote}${cppNote}${spHeatNote}`;
       }
       renderQualityTabs();
       renderCompressiveStrengthTabs();
@@ -5450,8 +5499,8 @@ function buildDpmInsightModel(from,to){
   sectionRows.forEach(({section,row:r,previous:p})=>{
     const area=dpmSectionLabel(section),stop=realStoppageSum(section==='Cement Mill'?'Cement Mill PPC':section,from,to);
     const previousStop=realStoppageSum(section==='Cement Mill'?'Cement Mill PPC':section,previous.from,previous.to);
-    const previousPlanned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n)-previousStop.plannedHrs-previousStop.delayedHrs;
-    const planned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n)-stop.plannedHrs-stop.delayedHrs;
+    const previousPlanned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n,previous.from,previous.to)-previousStop.plannedHrs-previousStop.delayedHrs;
+    const planned=calendarHoursFor(section==='Cement Mill'?'Cement Mill PPC':section,previous.n,from,to)-stop.plannedHrs-stop.delayedHrs;
     addMetric({id:'availability:'+section,domain:'Production',area,metric:'Availability',actual:planned>0?r.avail:null,target:95,unit:'%',lower:false,
       full:r.availUtilCoverage==='full',previous:p.avail,previousFull:p.availUtilCoverage==='full'&&previousPlanned>0,
       evidence:'Planned-hours basis; excludes planned and delayed stoppages. Running-hour utilisation '+dpmText(r.util,1)+'%.',
