@@ -1957,7 +1957,7 @@ function qualitySampleTotals(entries){
 function computeQualityConformance(dateFrom,dateTo,kind='clinker'){
   let entries;
   if(kind==='cement'){
-    entries=QUALITY_GROUPS.filter(g=>g.real&&['PPC','OPC'].includes(g.cementType)).flatMap(g=>
+    entries=QUALITY_GROUPS.filter(g=>g.real&&['PPC','OPC','Roof Xpert'].includes(g.cementType)).flatMap(g=>
       qualityGroupEntries(g).map(row=>({...row,section:'Cement '+g.cementType,param:row.param})));
   }else{
     const order={'Crusher':0,'Raw Mill':1,'Coal Mill':2,'Kiln Feed':3,'Kiln':3};
@@ -1994,7 +1994,7 @@ function renderQualityConformanceDetails(model){
   panel.innerHTML=`<div class="section-head"><h2>${model.title} — calculation backup</h2><button class="preset-btn" id="${closeId}">Hide table</button></div>
     <p class="hint">${toISO(state.dateFrom)} to ${toISO(state.dateTo)}. Conformance = parameters whose actual average is within Min–Max ÷ parameters with real readings and valid limits × 100.</p>
     <div class="quality-section-summary"><strong>${model.value===null?'N/A':fmt(model.value,2)+'%'} = ${model.within} ÷ ${model.judged} × 100</strong><span>${model.registered} registered parameters; ${model.excluded} excluded because readings or valid limits are unavailable.</span></div>
-    <p class="hint">${cement?'PPC and OPC parameters match the Cement Quality Parameters tabs. The 7-day and 28-day strength tests remain in Compressive Strength.':'Section order: Crusher → Raw Mill → Fuel Mill → Kiln. Crusher chemistry uses HG ILS samples, including LSF. Kiln Feed readings are listed under Kiln and labelled separately.'} The verdict uses the selected period’s actual average; OOR counts measure individual sample breaches.</p>
+    <p class="hint">${cement?'PPC, OPC and Roof Xpert parameters match their Cement Quality Parameters tabs. The 7-day and 28-day strength tests remain in Compressive Strength.':'Section order: Crusher → Raw Mill → Fuel Mill → Kiln. Crusher chemistry uses HG ILS samples, including LSF. Kiln Feed readings are listed under Kiln and labelled separately.'} The verdict uses the selected period’s actual average; OOR counts measure individual sample breaches.</p>
     <div class="table-wrap"><table><thead><tr><th>Section</th><th>Parameter</th><th>Target</th><th>Min</th><th>Max</th><th>Actual avg</th><th>Total Sample Count</th><th>OOR (Count)</th><th>Days covered</th><th>Result</th><th>In calculation</th></tr></thead><tbody>${rows}</tbody><tfoot>
     <tr><td class="rowhead" colspan="6" title="Totals add parameter readings; a physical sample tested for several parameters contributes once to each parameter.">Total parameter counts</td><td>${fmt(model.sampleTotal,0)}</td><td>${fmt(model.oorTotal,0)}</td><td colspan="3">OOR assessed for ${fmt(model.assessedSampleTotal,0)} parameter readings</td></tr>
     <tr><td class="rowhead" colspan="9">Within spec / assessed parameters</td><td>${model.within} / ${model.judged}</td><td>${model.value===null?'N/A':fmt(model.value,2)+'%'}</td></tr></tfoot></table></div>`;
