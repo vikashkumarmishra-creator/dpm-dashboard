@@ -2678,6 +2678,31 @@ const MTBF_FALLBACK = { 'Additive Crusher': 50, 'Crusher': 100, 'Raw Mill': 300,
 // computeSectionRow result `r` (so a couple of columns can call out row-specific nuances, e.g.
 // Packing Plant's doubled calendar-hours basis). Column meaning doesn't change row to row, so
 // this is one small dictionary rather than something threaded through every row's data.
+function dispatchPackerProduction(dateFrom,dateTo){
+  const rows=[{key:'old',label:'Old Packer',qty:0,run:0},{key:'new',label:'New Packer',qty:0,run:0},
+    {key:'special packer',label:'Special Packer',qty:0,run:0},{key:'bulker',label:'Bulker',qty:0,run:0}];
+  let hasQuantityDetail=false,hasRunDetail=false;
+  isoRangeDays(dateFrom,dateTo).forEach(d=>{
+    const rec=(REAL_ACTUAL['Packing Plant']||{})[d];if(!rec)return;
+    if(rec.packers){hasRunDetail=true;rows.forEach(r=>r.run+=rec.packers[r.key]||0);}
+    if(rec.packerDispatch){hasQuantityDetail=true;rows.forEach(r=>r.qty+=rec.packerDispatch[r.key]||0);}
+  });
+  const actual=realActualSum('Packing Plant',dateFrom,dateTo);
+  const total={qty:actual.covered?actual.prod:null,run:actual.covered?actual.run:null};
+  const residual={key:'unassigned',label:'Not attributed by source snapshot',qty:(total.qty||0)-rows.reduce((n,r)=>n+r.qty,0),run:(total.run||0)-rows.reduce((n,r)=>n+r.run,0)};
+  rows.forEach(r=>{if(!hasQuantityDetail)r.qty=null;if(!hasRunDetail)r.run=null;});
+  if(Math.abs(residual.qty)>1e-7||Math.abs(residual.run)>1e-7)rows.push(residual);
+  [...rows,total].forEach(r=>r.tph=r.qty!==null&&r.run>0?r.qty/r.run:null);
+  return {rows,total,hasQuantityDetail,hasRunDetail};
+}
+function dispatchProductionTableHtml(d){
+  const number=(v,dp)=>v==null?'&mdash;':fmt(v,dp);
+  const cells=(r,tag)=>'<'+tag+'>'+number(r.qty,2)+'</'+tag+'><'+tag+'>'+number(r.run,3)+'</'+tag+'><'+tag+'>'+number(r.tph,2)+'</'+tag+'>';
+  return '<p><b>Dispatch and TPH — packer-wise</b></p><table><thead><tr><th>Packer</th><th>Dispatched (MT)</th><th>Running (h)</th><th>TPH (MT/h)</th></tr></thead><tbody>'+
+    d.rows.map(r=>'<tr><td>'+r.label+'</td>'+cells(r,'td')+'</tr>').join('')+'<tr><th>Dispatch Total</th>'+cells(d.total,'th')+'</tr></tbody></table>'+
+    '<p>TPH = dispatched MT ÷ running hours for the selected window. Total TPH uses total MT ÷ total running hours. A dash means no valid running-hour denominator. Includes Old, New and Bulker; Special Packer is included from 1 November 2026.</p>'+
+    (!d.hasQuantityDetail||!d.hasRunDetail?'<p>Refresh all live data to load packer-wise dispatch and running-hour details. Unattributed totals are shown separately.</p>':'');
+}
 function dispatchCalculationSummary(dateFrom,dateTo){
   const days=isoRangeDays(dateFrom,dateTo),actual=REAL_ACTUAL['Packing Plant']||{},stoppage=REAL_STOPPAGE['Packing Plant']||{};
   const rows=[{key:'old',label:'Old Packer',run:0,planned:0,delayed:0,calendar:days.length*24},
@@ -2696,12 +2721,15 @@ function dispatchCalculationSummary(dateFrom,dateTo){
   const residual={key:'unassigned',label:'Not attributed by source snapshot',run:total.run-rows.reduce((n,r)=>n+r.run,0),planned:total.planned-rows.reduce((n,r)=>n+r.planned,0),delayed:total.delayed-rows.reduce((n,r)=>n+r.delayed,0),calendar:0};
   if(['run','planned','delayed'].some(k=>Math.abs(residual[k])>1e-7))rows.push(residual);
   total.available=total.calendar-total.planned-total.delayed;
-  return {from:toISO(dateFrom),to:toISO(dateTo),days:days.length,rows,total,live:run.covered>0&&stop.covered>0,
+  return {from:toISO(dateFrom),to:toISO(dateTo),days:days.length,rows,total,dispatch:dispatchPackerProduction(dateFrom,dateTo),live:run.covered>0&&stop.covered>0,
     availability:total.available>0?total.run/total.available*100:null,utilization:total.calendar>0?total.run/total.calendar*100:null,hasRunDetail,hasStopDetail,specialStopLogged};
 }
 function dispatchCalculationText(s){
   const h=n=>fmt(n,3);
-  return 'Dispatch Total calculation: '+s.from+' to '+s.to+' (hours)\n'+
+  return 'Dispatch Total calculation: '+s.from+' to '+s.to+'\n'+
+    'Dispatch: Packer | Dispatched MT | Running h | TPH (MT/h)\n'+
+    [...s.dispatch.rows,{label:'Dispatch Total',...s.dispatch.total}].map(r=>r.label+' | '+fmt(r.qty,2)+' | '+h(r.run)+' | '+fmt(r.tph,2)).join('\n')+
+    '\nTPH = dispatched MT ÷ running hours; total TPH = total MT ÷ total running hours.\nAvailability/utilization hours:\n'+
     'Packer | Running | Planned stoppage | Delayed | Calendar\n'+
     s.rows.map(r=>r.label+' | '+[r.run,r.planned,r.delayed,r.calendar].map(h).join(' | ')).join('\n')+
     '\nTotal | '+[s.total.run,s.total.planned,s.total.delayed,s.total.calendar].map(h).join(' | ')+
@@ -2718,7 +2746,8 @@ function showDispatchCalculation(anchor){
     document.addEventListener('click',e=>{if(!panel.contains(e.target)&&!e.target.closest('.dispatch-calc-trigger'))panel.hidden=true;});
   }
   const s=dispatchCalculationSummary(state.dateFrom,state.dateTo),h=n=>fmt(n,3),t=s.total;
-  panel.innerHTML='<button type="button" class="dispatch-close" aria-label="Close Dispatch calculation" onclick="this.parentNode.hidden=true">Close ×</button><strong>Dispatch Total — calculation backup</strong><p>'+s.from+' to '+s.to+' ('+s.days+' days). All figures below are hours.</p>'+
+  panel.innerHTML='<button type="button" class="dispatch-close" aria-label="Close Dispatch calculation" onclick="this.parentNode.hidden=true">Close ×</button><strong>Dispatch Total — calculation backup</strong><p>'+s.from+' to '+s.to+' ('+s.days+' days).</p>'+
+    dispatchProductionTableHtml(s.dispatch)+'<p><b>Availability and utilization — hours</b></p>'+
     '<table><thead><tr><th>Packer</th><th>Running</th><th>Planned stoppage</th><th>Delayed</th><th>Calendar</th></tr></thead><tbody>'+
     s.rows.map(r=>'<tr><td>'+r.label+'</td>'+[r.run,r.planned,r.delayed,r.calendar].map(v=>'<td>'+h(v)+'</td>').join('')+'</tr>').join('')+
     '<tr><th>Total used</th>'+[t.run,t.planned,t.delayed,t.calendar].map(v=>'<th>'+h(v)+'</th>').join('')+'</tr></tbody></table>'+
@@ -2753,7 +2782,7 @@ function prodColTip(col, r){
     util: 'Utilization % = Run Hours ÷ Calendar Hours x 100.' + calNote,
     performancePct: 'Performance % = Actual Production ÷ Target Production x 100 (same ratio as % Gap, expressed as a percentage of target instead of a delta).',
   };
-  return (TIPS[col] || '')+(isPacking&&['avail','util','actualRunHours'].includes(col)?'\n'+dispatchCalculationText(dispatchCalculationSummary(new Date(r.dispatchWindowFrom+'T00:00:00'),new Date(r.dispatchWindowTo+'T00:00:00'))):'');
+  return (TIPS[col] || '')+(isPacking&&['actualProd','actualTph','avail','util','actualRunHours'].includes(col)?'\n'+dispatchCalculationText(dispatchCalculationSummary(new Date(r.dispatchWindowFrom+'T00:00:00'),new Date(r.dispatchWindowTo+'T00:00:00'))):'');
 }
 function renderProductionTable(){
   document.getElementById('prodRangeLabel').textContent = toISO(state.dateFrom)+' to '+toISO(state.dateTo)+' ('+daysBetween(state.dateFrom,state.dateTo)+' days)';
@@ -4888,6 +4917,8 @@ function refreshLiveProduction(payload){
         const day=data['Packing Plant'][iso];
         const packers=day.packers||(day.packers={});
         packers[loc]=(packers[loc]||0)+run;
+        const dispatched=day.packerDispatch||(day.packerDispatch={});
+        dispatched[loc]=(dispatched[loc]||0)+(numOrNull(r[qCol])||0);
       }
       if(iso && iso>='2026-11-01'){
         const day=data['Packing Plant'][iso];
